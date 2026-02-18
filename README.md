@@ -1,168 +1,109 @@
-# Memory Steward
-
-**Memory Steward** is a local-first memory admission and context virtualization service for AI systems.
-
-It provides a strict, auditable layer for deciding **what is remembered**, **what is injected**, and **what is ignored**, independent of chat history, session boundaries, or model state.
-
-Memory Steward is part of the **Homel** organization.
+# MEMORY STEWARD
+## A Deterministic Cognitive Control Plane for LLM Systems
+### Foundational Engineering Specification (Root Document)
+*Namespace: memory-steward • Owner: architecture-team*
 
 ---
 
-## NAVIGATION
+## Navigation
+**← [Prev: Contributing](CONTRIBUTING.md) | [Next: Architecture Cheat Sheet](ARCHITECTURE_CHEAT_SHEET.md) →**
 
-- [Top](#memory-steward)
-- [1. What Problem This Solves](#1-what-problem-this-solves)
-- [2. Core Idea](#2-core-idea)
-- [3. What Memory Steward Is](#3-what-memory-steward-is)
-- [4. What Memory Steward Is NOT](#4-what-memory-steward-is-not)
-- [5. Architectural Overview](#5-architectural-overview)
-- [6. Design Principles](#6-design-principles)
-- [7. Non-Negotiable Invariants](#7-non-negotiable-invariants)
-- [8. Scope](#8-scope)
-- [9. Documentation](#9-documentation)
+- [0. Status, Scope, and Authority](#0-status-scope-and-authority)
+- [1. What is this?](#1-what-is-this)
+- [2. Documentation Index](#2-documentation-index)
+- [3. Architecture & Standards](#3-architecture--standards)
+- [4. Quick Start (Deployment)](#4-quick-start-deployment)
+- [5. License](#5-license)
+- [6. Closing Statement](#6-closing-statement)
 
 ---
 
-## 1. What Problem This Solves
+## 0. Status, Scope, and Authority
 
-Large Language Models are:
+**Status:** ACTIVE / CANONICAL
+**Audience:** General Engineering Public
+**Change policy:**
+- Append-only
+- No silent edits
 
-- stateless
-- constrained by finite context windows
-- isolated by chat and session boundaries
+**Documentation:** [docs/](docs/)
 
-As a result, long-running work degrades over time:
-constraints are forgotten, decisions drift, and users must restate context manually.
-
-Memory Steward addresses this by introducing a **context virtualization layer** above the LLM.
-
-Every user message is treated as a query into a structured memory system, and relevant past context is dynamically re-injected — without relying on chat history.
-
-[Back to Top](#memory-steward)
+[Back to top](#navigation)
 
 ---
 
-## 2. Core Idea
+## 1. What is this?
 
-> **Memory is not accumulated. It is reconstructed.**
+Memory Steward is not a chatbot. It is a **Cognitive Control Plane** that enforces determinism, safety, and long-term memory coherence on top of probabilistic LLMs.
 
-The LLM remains stateless.
+It separates **Reasoning** (The Model) from **Memory & Policy** (The Steward), ensuring that critical invariants—like safety rules, personality constraints, and authoritative facts—are never hallucinated or forgotten.
 
-Context is rebuilt on every turn from:
-- canonical rules
-- retrieved semantic fragments
-
-[Back to Top](#memory-steward)
+[Back to top](#navigation)
 
 ---
 
-## 3. What Memory Steward Is
+## 2. Documentation Index
 
-- A **memory admission controller**
-- A **context reconstruction service**
-- A **gatekeeper** between interaction and persistence
-- A **local-first**, inspectable system
+The system is fully specified in the `docs/` directory.
 
-[Back to Top](#memory-steward)
+### 2.1 For Architects (The "Why")
+- **[01_overview.md](docs/01_overview.md):** System architecture, taxonomy, and core invariants.
+- **[10_industry_landscape.md](docs/10_industry_landscape.md):** Why we built this (vs. RAG/LangChain).
+- **[11_design_principles.md](docs/11_design_principles.md):** Async semantics and storage philosophy.
 
----
+### 2.2 For Engineers (The "How")
+- **[02_operational_mode.md](docs/02_operational_mode.md):** How the system decides "Engineering" vs "Casual".
+- **[03_reference.md](docs/03_reference.md):** How to ingest documentation (Reference Memory).
+- **[04_optimizations.md](docs/04_optimizations.md):** Caching, Speculation, and Latency tuning.
+- **[05_stability.md](docs/05_stability.md):** Hysteresis loops to prevent mode jitter.
 
-## 4. What Memory Steward Is NOT
+### 2.3 For Operators (The "Now")
+- **[06_telemetry.md](docs/06_telemetry.md):** Metrics, Dashboards, and SQL schemas.
+- **[07_glass_pane.md](docs/07_glass_pane.md):** The "Glass Pane" management interface (MCP).
+- **[09_runtime_contract.md](docs/09_runtime_contract.md):** Env vars, Ports, and C4 Architecture.
 
-- Not a chat log
-- Not a RAG framework
-- Not an agent
-- Not an execution engine
-- Not a planner
-- Not autonomous
+### 2.4 For QA & Maintainers
+- **[08_verification.md](docs/08_verification.md):** The "Definition of Done" and regression tests.
+- **[00_style_guide.md](docs/00_style_guide.md):** Documentation standards.
 
-Memory Steward does not decide *what to do*.  
-It decides *what is worth remembering*.
-
-[Back to Top](#memory-steward)
-
----
-
-## 5. Architectural Overview
-
-High-level flow:
-
-~~~text
-User Interaction
-   ↓
-Memory Admission (Steward)
-   ↓
-Atomic Memory Fragments
-   ↓
-Persistent Storage
-   ↓
-Relevance-Based Retrieval
-   ↓
-Prompt Reconstruction
-   ↓
-LLM Execution
-~~~
-
-[Back to Top](#memory-steward)
+[Back to top](#navigation)
 
 ---
 
-## 6. Design Principles
+## 3. Architecture & Standards
 
-- **Stateless models**  
-  The LLM is never assumed to remember anything.
+Memory Steward is not just a codebase; it is a reference implementation of the **Dual-Plane Memory Architecture**. We adhere to strict engineering standards to prevent "Probabilistic Drift" in production systems. For deep dives and architectural reasoning, please refer to our core documentation:
 
-- **Explicit layering**  
-  Canonical rules and dynamic context have different semantics.
+- **[Technical White Paper](./docs/WHITEPAPER.md):** *The "Engineering Manifesto." Explains the philosophy of Determinism, the "Alignment Tax" of memory, and why we split the system into Data and Control planes.*
+- **[RFC Standard (Proposal)](./RFC_PROPOSAL.md):** *The formal specification for the Dual-Plane Architecture. Defines the strict separation of concerns, async admission contracts, and atomic storage requirements.*
+- **[Architecture Cheat Sheet](./ARCHITECTURE_CHEAT_SHEET.md):** *A high-density one-pager for System Operators. Contains the C4 System Map, Env Variable Reference, and MCP Tool definitions for quick lookup.*
 
-- **Admission over accumulation**  
-  Nothing is stored unless explicitly admitted.
-
-- **Auditability**  
-  All memory entries are inspectable.
-
-- **Local sovereignty**  
-  All components can run locally.
-
-[Back to Top](#memory-steward)
+[Back to top](#navigation)
 
 ---
 
-## 7. Non-Negotiable Invariants
+## 4. Quick Start (Deployment)
 
-- Static memory is never embedded
-- Dynamic memory is never blindly injected
-- Retrieval happens on every turn
-- Chat/session boundaries are not trusted
-- Relevance beats recency
-- The Steward never generates answers
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Kubernetes/Docker Compose instructions.
 
-Violating these breaks the system.
-
-[Back to Top](#memory-steward)
+[Back to top](#navigation)
 
 ---
 
-## 8. Scope
+## 5. License
 
-This repository implements the **Memory Steward** system only.
+Apache License 2.0
 
-Execution, supervision, tooling, and convergence logic are intentionally **out of scope** and handled by separate projects within the Homel organization.
+See [LICENSE](LICENSE-2.0.txt) file for details.
 
-[Back to Top](#memory-steward)
-
----
-
-## 9. Documentation
-
-- `docs/architecture.md` — Canonical architecture specification
-- `docs/invariants.md` — System invariants and hard constraints
-- `docs/industry-landscape-memory.md` — Derived landscape analysis specific to Memory Steward
-
-[Back to Top](#memory-steward)
+[Back to top](#navigation)
 
 ---
 
-**Memory Steward**  
-by HomelDev  
-https://homel.dev
+## 6. Closing Statement
+
+This repository constitutes the definitive implementation of the Memory Steward, operating strictly within the invariants defined by the core engineering specifications.
+
+---
+
+**END OF DOCUMENT README**
