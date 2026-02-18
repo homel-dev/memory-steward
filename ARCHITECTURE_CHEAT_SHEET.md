@@ -1,4 +1,3 @@
-`
 # ARCHITECTURE CHEAT SHEET
 ## Control Plane • Async Admission • Atomic Persistence
 ### Foundational Engineering Specification (Root Document)
