@@ -34,7 +34,7 @@
 
 *The strict separation between "Thinking" (Router) and "Remembering" (Steward).*
 
-~~mermaid
+~~~mermaid
 graph TD
     User((User))
     UI[AnythingLLM UI]
@@ -69,7 +69,7 @@ graph TD
     Router -.->|Async Signal| Steward
     Steward -->|Write| Qdrant
     Steward -->|Metadata| DB
-~~
+~~~
 
 [Back to top](#navigation)
 
@@ -101,7 +101,7 @@ graph TD
 
 *Ensuring the "Cost of Remembering" is never paid by the user.*
 
-~~mermaid
+~~~mermaid
 sequenceDiagram
     participant U as User
     participant R as Router
@@ -120,7 +120,7 @@ sequenceDiagram
         S->>S: Extract Atomic Facts
         S->>Q: Upsert Memory
     end
-~~
+~~~
 
 [Back to top](#navigation)
 
