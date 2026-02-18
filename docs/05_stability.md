@@ -112,12 +112,12 @@ The Memory Steward maintains the following conceptual state:
 
 ### 4.3 Transition Rule (Conceptual)
 
-~~text
+~~~text
 If confidence(M_candidate) sustained over K interactions
 AND confidence exceeds threshold
 THEN transition to M_candidate
 ELSE remain in M_current
-~~
+~~~
 
 [cite_start]This rule applies symmetrically to all modes. [cite: 332]
 
@@ -126,9 +126,9 @@ ELSE remain in M_current
 [cite_start]Recent interactions are weighted more heavily than older ones. [cite: 333]
 Example decay model (conceptual):
 
-~~text
+~~~text
 weight = e^( -Δt / τ )
-~~
+~~~
 
 Where:
 - Δt = time elapsed since interaction
