@@ -1,4 +1,4 @@
-
+`
 # ARCHITECTURE CHEAT SHEET
 ## Control Plane • Async Admission • Atomic Persistence
 ### Foundational Engineering Specification (Root Document)
@@ -116,7 +116,7 @@ sequenceDiagram
 
     rect rgb(255, 243, 224)
         Note right of R: THE COLD PATH (Async)
-        R->>)S: Fire-and-Forget Signal
+        R->>S: Fire-and-Forget Signal
         S->>S: Extract Atomic Facts
         S->>Q: Upsert Memory
     end
