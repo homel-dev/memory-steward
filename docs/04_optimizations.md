@@ -104,7 +104,7 @@ Any optimization MUST preserve the following invariants:
 
 ### 4.2 Execution Flow
 
-~~text
+~~~text
 User Request
      |
      +--> Steward (classification) -----------+
@@ -114,7 +114,7 @@ User Request
 Steward Result ------+
                                  |
 Validate / Abort
-~~
+~~~
 
 ### 4.3 Speculation Rules
 
