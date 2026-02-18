@@ -84,7 +84,7 @@ Memory Steward is not just a codebase; it is a reference implementation of the *
 
 ## 4. Quick Start (Deployment)
 
-See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Kubernetes/Docker Compose instructions.
+See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Kubernetes instructions.
 
 [Back to top](#navigation)
 
