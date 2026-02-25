@@ -16,6 +16,9 @@
 - [5. Mode Transitions](#5-mode-transitions)
 - [6. Routing Effects of Mode](#6-routing-effects-of-mode)
 - [7. Prompt Assembly Contract (Mode-Aware)](#7-prompt-assembly-contract-mode-aware)
+- [7.1 Mode Effects on Builder Prompt](#71-mode-effects-on-builder-prompt)
+- [7.2 Mode Effects on Steward Prompt](#72-mode-effects-on-steward-prompt)
+- [7.3 Mode Isolation Invariant](#73-mode-isolation-invariant)
 - [8. Failure Modes and Safe Defaults](#8-failure-modes-and-safe-defaults)
 - [9. Implementation Guidance (Non-Code)](#9-implementation-guidance-non-code)
 - [10. Hard Invariants (Mode System)](#10-hard-invariants-mode-system)
@@ -212,6 +215,65 @@ Router must never:
 - change rule text
 - reorder precedence
 - omit required layers
+
+[Back to top](#navigation)
+
+---
+
+### 7.1 Mode Effects on Builder Prompt
+
+Operational mode influences behavioral shaping but MUST NOT alter canonical memory precedence.
+
+Mode may affect:
+
+- Strictness of reasoning.
+- Hypothesis allowance.
+- Degree of constraint emphasis.
+- Whether `static_mode_conditioned` is injected.
+
+Mode MUST NOT:
+
+- Reorder memory layers.
+- Inject new memory categories.
+- Override `static_global`.
+- Alter injection position defined in Document 01.
+
+Mode influences instruction tone and behavioral constraints only.
+
+[Back to top](#navigation)
+
+### 7.2 Mode Effects on Steward Prompt
+
+Operational mode influences memory governance behavior.
+
+Mode may affect:
+
+- Extraction aggressiveness.
+- Admission confidence thresholds.
+- Whether classification-only or classification+extraction is performed.
+
+Mode MUST NOT:
+
+- Introduce conversational shaping rules into the Steward prompt.
+- Override canonical memory semantics.
+- Affect reference memory mutability rules defined in Document 03.
+
+The Steward remains a control-plane component independent of conversational tone.
+
+[Back to top](#navigation)
+
+### 7.3 Mode Isolation Invariant
+
+Mode classification logic belongs to the Control Plane.
+
+> **Hard Invariant:** Builder MUST NOT receive internal mode classification metadata.
+> **Hard Invariant:** Builder MUST NOT be aware of the reasoning process that selected the mode.
+
+The Builder sees only the behavioral shaping derived from the active mode.
+
+The Steward may see mode explicitly as part of its classification objective.
+
+This preserves separation between decision authority and inference execution.
 
 [Back to top](#navigation)
 
