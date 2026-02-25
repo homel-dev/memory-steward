@@ -326,7 +326,12 @@ Example schema:
     "non_negotiable_rules": []
   },
   "enforcement_protocol": {
-    "steps": []
+    "steps": [
+      "Read policy_layer.",
+      "Interpret current_objective.",
+      "Generate response.",
+      "Verify compliance with policy_layer."
+    ]
   },
   "system_ontology": {
     "project_name": "Memory Steward",
@@ -344,7 +349,7 @@ Example schema:
     "instruction": "",
     "expected_properties": []
   },
-  "final_reminder": ""
+  "final_reminder": "Ensure compliance with policy_layer before producing final output."
 }
 ~~~
 
@@ -367,10 +372,19 @@ Example schema:
 ~~~json
 {
   "policy_layer": {
-    "admission_rules": []
+    "admission_rules": [
+      "Store only stable user-asserted facts.",
+      "Reject transient or emotional language.",
+      "Detect contradictions with existing memory."
+    ]
   },
   "enforcement_protocol": {
-    "steps": []
+    "steps": [
+      "Read policy_layer.",
+      "Interpret current_objective.",
+      "Compare new input against retrieval_context.",
+      "Produce strict JSON decision."
+    ]
   },
   "system_ontology": {
     "project_name": "Memory Steward",
