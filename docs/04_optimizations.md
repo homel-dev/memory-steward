@@ -19,13 +19,8 @@
 - [7. Asynchronous Context Loading](#7-asynchronous-context-loading)
 - [8. [cite_start]Ingestion and Versioning Optimizations](#8-ingestion-and-versioning-optimizations) [cite: 533]
 - [9. [cite_start]Explicit Non-Goals](#9-explicit-non-goals) [cite: 534]
-- [10. Summary](#10-summary)
-- [11. Prompt Envelope Serialization (Implementation)](#11-prompt-envelope-serialization-implementation)
-- [11.1 Canonical Envelope Construction](#111-canonical-envelope-construction)
-- [11.2 Builder Canonical Envelope Schema](#112-builder-canonical-envelope-schema)
-- [11.3 Steward Canonical Envelope Schema](#113-steward-canonical-envelope-schema)
-- [11.4 Provider Adapter Contract](#114-provider-adapter-contract)
-- [11.5 Token Budget Enforcement](#115-token-budget-enforcement)
+- [10. Prompt Envelope Serialization (Implementation)](#10-prompt-envelope-serialization-implementation)
+- [11. Summary](#11-summary)
 
 
 ---
@@ -252,24 +247,7 @@ This document explicitly forbids:
 
 ---
 
-## 10. Summary
-
-| Challenge | Solution | Key Benefit |
-| :--- | :--- | :--- |
-| **Latency ($T_{steward}$)** | **Semantic Caching** | [cite_start]Skips LLM inference for common queries. [cite: 574] |
-| **Latency (Speculation)** | **Scatter-Gather** | [cite_start]Removes "Abort & Retry" penalty; parallelizes retrieval. [cite: 575] |
-| **Latency (Writes)** | **Async/Backgrounding** | Telemetry writes never block user response. |
-| **Namespace (Ops)** | **GitOps / Knowledge-as-Code** | [cite_start]Audit trail, CI/CD for data, automated ingestion. [cite: 577] |
-| **Namespace (Safety)** | **Atomic Aliasing** | Zero-downtime updates, instant rollbacks. |
-
-[cite_start]Control-plane execution optimizations are acceptable **only** when they preserve determinism and authority boundaries. [cite: 578]
-[cite_start]Speculative routing and caching are **performance enhancements**, not behavioral changes. [cite: 579]
-
----
-
----
-
-## 11. Prompt Envelope Serialization (Implementation)
+## 10. Prompt Envelope Serialization (Implementation)
 
 This section defines implementation mechanics for constructing and serializing
 the canonical prompt envelope.
@@ -286,7 +264,7 @@ It does not redefine canonical semantics from Documents 01–03.
 
 ---
 
-### 11.1 Canonical Envelope Construction
+### 10.1 Canonical Envelope Construction
 
 Before any provider call, the Router MUST construct a fully explicit canonical envelope.
 
@@ -311,7 +289,7 @@ Rules:
 
 ---
 
-### 11.2 Builder Canonical Envelope Schema
+### 10.2 Builder Canonical Envelope Schema
 
 Builder MUST receive full canonical structure.
 
@@ -363,7 +341,7 @@ Constraints:
 
 ---
 
-### 11.3 Steward Canonical Envelope Schema
+### 10.3 Steward Canonical Envelope Schema
 
 Steward MUST use identical top-level structure.
 
@@ -418,7 +396,7 @@ Steward output MUST be strict JSON only.
 
 ---
 
-### 11.4 Provider Adapter Contract
+### 10.4 Provider Adapter Contract
 
 After canonical envelope construction, the provider adapter performs transport serialization.
 
@@ -450,7 +428,7 @@ Provider mapping is transport-only.
 
 ---
 
-### 11.5 Token Budget Enforcement
+### 10.5 Token Budget Enforcement
 
 Token enforcement occurs after envelope construction and before dispatch.
 
@@ -474,6 +452,20 @@ Trimming MUST preserve:
 
 [Back to top](#navigation)
 
+---
+
+## 11. Summary
+
+| Challenge | Solution | Key Benefit |
+| :--- | :--- | :--- |
+| **Latency ($T_{steward}$)** | **Semantic Caching** | [cite_start]Skips LLM inference for common queries. [cite: 574] |
+| **Latency (Speculation)** | **Scatter-Gather** | [cite_start]Removes "Abort & Retry" penalty; parallelizes retrieval. [cite: 575] |
+| **Latency (Writes)** | **Async/Backgrounding** | Telemetry writes never block user response. |
+| **Namespace (Ops)** | **GitOps / Knowledge-as-Code** | [cite_start]Audit trail, CI/CD for data, automated ingestion. [cite: 577] |
+| **Namespace (Safety)** | **Atomic Aliasing** | Zero-downtime updates, instant rollbacks. |
+
+[cite_start]Control-plane execution optimizations are acceptable **only** when they preserve determinism and authority boundaries. [cite: 578]
+[cite_start]Speculative routing and caching are **performance enhancements**, not behavioral changes. [cite: 579]
 
 ---
 
