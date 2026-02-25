@@ -4,26 +4,28 @@
 *Namespace: memory-steward • Owner: architecture-team*
 
 ---
-
 ## Navigation
-**← [Prev: Document 02 (Operational Modes)](02_operational_mode.md) | [cite_start][Next: Document 04 (Optimizations)](04_optimizations.md) →** [cite: 615]
+**← [Prev: Document 02 (Operational Modes)](02_operational_mode.md) | [Next: Document 04 (Optimizations)](04_optimizations.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. [cite_start]Definition and Non-Negotiable Invariants](#1-definition-and-non-negotiable-invariants) [cite: 616]
-- [2. [cite_start]What Qualifies as Reference Memory](#2-what-qualifies-as-reference-memory) [cite: 617]
-- [3. [cite_start]Logical Separation from Other Memory Types](#3-logical-separation-from-other-memory-types) [cite: 618]
-- [4. [cite_start]Metadata Model (Required)](#4-metadata-model-required) [cite: 619]
-- [5. [cite_start]Ingestion Workflow (Steward-Owned)](#5-ingestion-workflow-steward-owned) [cite: 620]
-- [6. [cite_start]Retrieval Gating (Critical Section)](#6-retrieval-gating-critical-section) [cite: 621]
-- [7. [cite_start]Retrieval Flow (Implementation-Grade)](#7-retrieval-flow-implementation-grade) [cite: 622]
-- [8. [cite_start]Injection Semantics](#8-injection-semantics) [cite: 623]
-- [9. [cite_start]Version Correctness Guarantees](#9-version-correctness-guarantees) [cite: 624]
-- [10. [cite_start]Failure Modes and Safe Behavior](#10-failure-modes-and-safe-behavior) [cite: 625]
+- [1. Definition and Non-Negotiable Invariants](#1-definition-and-non-negotiable-invariants)
+- [2. What Qualifies as Reference Memory](#2-what-qualifies-as-reference-memory)
+- [3. Logical Separation from Other Memory Types](#3-logical-separation-from-other-memory-types)
+- [4. Metadata Model (Required)](#4-metadata-model-required)
+- [5. Ingestion Workflow (Steward-Owned)](#5-ingestion-workflow-steward-owned)
+- [6. Retrieval Gating (Critical Section)](#6-retrieval-gating-critical-section)
+- [7. Retrieval Flow (Implementation-Grade)](#7-retrieval-flow-implementation-grade)
+- [8. Injection Semantics](#8-injection-semantics)
+- [8.1 Builder Injection Rules](#81-builder-injection-rules)
+- [8.2 Steward Visibility Rules](#82-steward-visibility-rules)
+- [8.3 Cross-Layer Integrity](#83-cross-layer-integrity)
+- [9. Version Correctness Guarantees](#9-version-correctness-guarantees)
+- [10. Failure Modes and Safe Behavior](#10-failure-modes-and-safe-behavior)
 - [11. Telemetry Requirements](#11-telemetry-requirements)
-- [12. [cite_start]Hard Invariants (Reference Memory)](#12-hard-invariants-reference-memory) [cite: 626]
+- [12. Hard Invariants (Reference Memory)](#12-hard-invariants-reference-memory)
 - [13. Relationship to Other Documents](#13-relationship-to-other-documents)
 - [14. Closing Statement](#14-closing-statement)
-- [15. [cite_start]Amendment: Namespace Clarification](#15-amendment-namespace-clarification) [cite: 627]
+- [15. Amendment: Namespace Clarification](#15-amendment-namespace-clarification)
 
 ---
 
@@ -228,19 +230,49 @@ User Request
 
 ---
 
-## 8. Injection Semantics
+### 8.1 Builder Injection Rules
 
-### 8.1 Injection Position
+Reference memory MAY be injected into the Builder prompt only if all retrieval gates defined in Section 6 pass.
 
-[cite_start]Injected after static rules, before dynamic memory. [cite: 635]
+When injected:
 
-### 8.2 Injection Format
+- Reference memory MUST appear after static rules and before dynamic memory.
+- Reference memory MUST be attributed.
+- Reference memory MUST NOT be paraphrased during injection.
+- Injection MUST respect canonical layer order defined in Document 01.
 
-[cite_start]Injected as **attributed excerpts**, never paraphrased. [cite: 636]
-~~~text
-REFERENCE (Terraform 1.6, official docs):
-- ...
-~~~
+Reference memory is advisory context for inference, not authoritative override of static rules.
+
+[Back to top](#navigation)
+
+### 8.2 Steward Visibility Rules
+
+By default, the Steward prompt MUST NOT receive reference memory.
+
+The Steward MAY access reference memory only when:
+
+- Validation of version-scoped dynamic facts is required.
+- Classification logic explicitly depends on external authoritative knowledge.
+
+When reference memory is visible to the Steward:
+
+- It MUST remain read-only.
+- It MUST NOT override canonical memory semantics.
+- It MUST NOT be re-ingested as dynamic memory.
+
+The Steward governs dynamic memory, not reference memory.
+
+[Back to top](#navigation)
+
+### 8.3 Cross-Layer Integrity
+
+Reference memory remains logically isolated from both Builder and Steward mutation authority.
+
+- Builder MUST NOT mutate reference memory.
+- Steward MUST NOT mutate reference memory during admission.
+- Reference memory ingestion remains governed exclusively by Section 5.
+
+This preserves separation between authoritative sources and learned conversational memory.
 
 [Back to top](#navigation)
 
