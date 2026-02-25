@@ -20,6 +20,13 @@
 - [8. [cite_start]Ingestion and Versioning Optimizations](#8-ingestion-and-versioning-optimizations) [cite: 533]
 - [9. [cite_start]Explicit Non-Goals](#9-explicit-non-goals) [cite: 534]
 - [10. Summary](#10-summary)
+- [11. Prompt Envelope Serialization (Implementation)](#11-prompt-envelope-serialization-implementation)
+- [11.1 Canonical Envelope Construction](#111-canonical-envelope-construction)
+- [11.2 Builder Canonical Envelope Schema](#112-builder-canonical-envelope-schema)
+- [11.3 Steward Canonical Envelope Schema](#113-steward-canonical-envelope-schema)
+- [11.4 Provider Adapter Contract](#114-provider-adapter-contract)
+- [11.5 Token Budget Enforcement](#115-token-budget-enforcement)
+
 
 ---
 
@@ -257,6 +264,202 @@ This document explicitly forbids:
 
 [cite_start]Control-plane execution optimizations are acceptable **only** when they preserve determinism and authority boundaries. [cite: 578]
 [cite_start]Speculative routing and caching are **performance enhancements**, not behavioral changes. [cite: 579]
+
+---
+
+---
+
+## 11. Prompt Envelope Serialization (Implementation)
+
+This section defines implementation mechanics for constructing and serializing
+the canonical prompt envelope.
+
+This section is:
+
+- non-canonical
+- transport-level
+- implementation-scoped
+
+It does not redefine canonical semantics from Documents 01–03.
+
+[Back to top](#navigation)
+
+---
+
+### 11.1 Canonical Envelope Construction
+
+Before any provider call, the Router MUST construct a fully explicit canonical envelope.
+
+Required top-level blocks:
+
+- `policy_layer`
+- `enforcement_protocol`
+- `system_ontology`
+- `retrieval_context`
+- `dialogue_state`
+- `current_objective`
+- `final_reminder`
+
+Rules:
+
+- Block names MUST remain stable.
+- Block order MUST remain deterministic.
+- Unused blocks MUST still be present as empty objects.
+- Provider-specific fields are forbidden at this stage.
+
+[Back to top](#navigation)
+
+---
+
+### 11.2 Builder Canonical Envelope Schema
+
+Builder MUST receive full canonical structure.
+
+Example schema:
+
+~~~json
+{
+  "policy_layer": {
+    "language": "English only",
+    "style": "Technical, precise, no fluff",
+    "format_requirements": [],
+    "non_negotiable_rules": []
+  },
+  "enforcement_protocol": {
+    "steps": []
+  },
+  "system_ontology": {
+    "project_name": "Memory Steward",
+    "core_components": [],
+    "definitions": {}
+  },
+  "retrieval_context": {
+    "relevance_filtered_facts": []
+  },
+  "dialogue_state": {
+    "recent_summary": "",
+    "active_constraints": []
+  },
+  "current_objective": {
+    "instruction": "",
+    "expected_properties": []
+  },
+  "final_reminder": ""
+}
+~~~
+
+Constraints:
+
+- No memory admission directives allowed.
+- No Steward classification metadata allowed.
+- No control-plane reasoning metadata allowed.
+
+[Back to top](#navigation)
+
+---
+
+### 11.3 Steward Canonical Envelope Schema
+
+Steward MUST use identical top-level structure.
+
+Example schema:
+
+~~~json
+{
+  "policy_layer": {
+    "admission_rules": []
+  },
+  "enforcement_protocol": {
+    "steps": []
+  },
+  "system_ontology": {
+    "project_name": "Memory Steward",
+    "core_components": [],
+    "definitions": {}
+  },
+  "retrieval_context": {
+    "relevance_filtered_facts": []
+  },
+  "dialogue_state": {
+    "recent_summary": "",
+    "active_constraints": []
+  },
+  "current_objective": {
+    "task": "memory_admission",
+    "new_input": "",
+    "decision_required": [
+      "extract_facts",
+      "detect_updates",
+      "detect_conflicts",
+      "ignore_noise"
+    ]
+  },
+  "final_reminder": "Output MUST be strict JSON only."
+}
+~~~
+
+Steward output MUST be strict JSON only.
+
+[Back to top](#navigation)
+
+---
+
+### 11.4 Provider Adapter Contract
+
+After canonical envelope construction, the provider adapter performs transport serialization.
+
+Example (OpenAI-style mapping):
+
+~~~json
+{
+  "model": "gpt-x",
+  "messages": [
+    {
+      "role": "system",
+      "content": "<serialized canonical envelope>"
+    }
+  ],
+  "temperature": 0.2
+}
+~~~
+
+The adapter MUST NOT:
+
+- Rename canonical blocks
+- Reorder canonical blocks
+- Merge Builder and Steward envelopes
+- Inject provider metadata into canonical object
+
+Provider mapping is transport-only.
+
+[Back to top](#navigation)
+
+---
+
+### 11.5 Token Budget Enforcement
+
+Token enforcement occurs after envelope construction and before dispatch.
+
+Blocks that MUST NOT be truncated:
+
+- `policy_layer`
+- `enforcement_protocol`
+- `current_objective`
+- `final_reminder`
+
+Lower-priority blocks MAY be truncated:
+
+- `retrieval_context`
+- `dialogue_state`
+
+Trimming MUST preserve:
+
+- Structural validity
+- Deterministic ordering
+- Canonical semantics
+
+[Back to top](#navigation)
+
 
 ---
 
