@@ -14,6 +14,7 @@
 - [3. Core Design Principles (Non-Negotiable)](#3-core-design-principles-non-negotiable)
 - [4. Canonical Memory Taxonomy](#4-canonical-memory-taxonomy)
 - [5. Memory Precedence and Injection Order](#5-memory-precedence-and-injection-order)
+- [5.1 Prompt Construction as Enforcement Layer](#51-prompt-construction-as-enforcement-layer)
 - [6. Gating Rules (High-Level)](#6-gating-rules-high-level)
 - [7. Mutability Matrix (Summary)](#7-mutability-matrix-summary)
 - [8. Hard Invariants (Must Never Be Violated)](#8-hard-invariants-must-never-be-violated)
@@ -210,6 +211,87 @@ Write-only operational observability data.
 
 ---
 
+## 5.1 Prompt Construction as Enforcement Layer
+
+Memory precedence is a conceptual rule set. Prompt construction is its mechanical enforcement.
+
+The Router enforces canonical memory ordering by assembling prompts according to this document.
+The Model never enforces memory hierarchy.
+The Steward never assembles Builder prompts.
+
+Prompt construction is therefore part of the control-plane contract, not an implementation accident.
+
+[Back to top](#navigation)
+
+### 5.1.1 Dual Prompt Species (Builder vs Steward)
+
+The system defines two ontologically distinct prompt types:
+
+1. Builder Prompt
+2. Steward Prompt
+
+They are not variants of the same template. They serve different planes and MUST remain isolated.
+
+> **Hard Invariant:** Builder and Steward prompts MUST NOT share structural templates.
+> **Hard Invariant:** A single model invocation MUST NOT serve both Builder and Steward roles simultaneously.
+
+**Builder Prompt**
+- Purpose: generate user-facing responses.
+- Assembled by: Router.
+- Consumed by: Builder LLM.
+- MUST reflect canonical memory precedence.
+
+**Steward Prompt**
+- Purpose: classification, extraction, and memory governance.
+- Assembled by: Router (for Steward).
+- Consumed by: Steward LLM.
+- MUST NOT include conversational behavior rules intended for Builder.
+
+This separation preserves the Data Plane / Control Plane boundary defined in Section 3.
+
+[Back to top](#navigation)
+
+### 5.1.2 Canonical Builder Prompt Layer Order
+
+The Builder prompt MUST respect the canonical injection order defined in Section 5.
+
+The semantic order is:
+
+1. `static_global`
+2. `static_mode_conditioned` (if applicable)
+3. Session-local constraints
+4. `reference_memory` (gated)
+5. `dynamic_memory` (gated)
+6. User message
+
+Lower layers MUST NOT override higher layers.
+
+The Router MUST preserve this ordering independent of provider serialization format.
+
+[Back to top](#navigation)
+
+### 5.1.3 Canonical Steward Prompt Structure
+
+The Steward prompt serves a different objective and therefore follows a distinct structure.
+
+The semantic components are:
+
+1. Steward system instructions (classification / extraction rules)
+2. Relevant recent conversation turns (bounded)
+3. Optional dynamic lookup context (gated)
+4. Explicit task objective (e.g., classify mode, extract atomic facts)
+
+The Steward prompt MUST NOT:
+- Inject `static_global` interaction rules intended for conversational shaping.
+- Inject reference memory unless explicitly required for validation logic.
+- Contain Builder behavioral instructions.
+
+The Steward exists to govern memory, not to generate conversation.
+
+[Back to top](#navigation)
+
+---
+
 ## 6. Gating Rules (High-Level)
 
 Memory inclusion is gated by:
@@ -249,6 +331,11 @@ Memory inclusion is gated by:
 - Reference memory is never belief
 - Static memory is never silently changed
 - Existing contracts are immutable without approval
+- Builder and Steward prompts are separate species and MUST NOT be merged.
+- A single model invocation MUST NOT serve both Builder and Steward roles simultaneously.
+- Prompt assembly MUST preserve canonical memory precedence order.
+- Steward prompts MUST NOT contain conversational shaping rules intended for Builder.
+- Builder prompts MUST NOT contain extraction/classification rules intended for Steward.
 
 [cite_start]Violation is a **system design error**. [cite: 612]
 
