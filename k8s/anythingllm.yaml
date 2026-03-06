@@ -43,7 +43,6 @@ spec:
 
       containers:
         - name: anythingllm
-          #image: mintplexlabs/anythingllm:latest
           image: ghcr.io/homel-dev/anything-llm:0.24.2
           imagePullPolicy: Always
           env:

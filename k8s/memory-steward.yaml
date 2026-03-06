@@ -26,8 +26,8 @@ spec:
     spec:
       containers:
         - name: steward
-          image: homel/memory-steward:dev
-          imagePullPolicy: IfNotPresent
+          image:  ghcr.io/homel-dev/memory-steward/memory-steward:0.1.0
+          imagePullPolicy: Always
           ports:
             - containerPort: 8090
           envFrom:

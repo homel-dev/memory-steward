@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: mcp
-          image: homel/memory-steward-mcp:dev
-          imagePullPolicy: IfNotPresent
+          image:  ghcr.io/homel-dev/memory-steward/memory-steward-mcp:0.1.0
+          imagePullPolicy: Always
           ports:
             - containerPort: 8081
               name: sse

@@ -26,8 +26,8 @@ spec:
     spec:
       containers:
         - name: router
-          image: homel/memory-router:dev
-          imagePullPolicy: IfNotPresent
+          image: ghcr.io/homel-dev/memory-steward/memory-router:0.1.0
+          imagePullPolicy: Always
           ports:
             - containerPort: 8080
           envFrom:
