@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+###############################################################################
+# Memory Steward — Installation Script
+#
+# Purpose:
+#   - Bootstrap a local Memory Steward environment using Minikube
+#   - Reuse canonical manifests from /k8s
+#   - Avoid duplication and configuration drift
+#
+# This script is intentionally verbose and self-documenting.
+###############################################################################
+
+SCRIPT_NAME="memory-steward-installer"
+REPO_URL="https://github.com/homel-dev/memory-steward.git"
+DEFAULT_NAMESPACE="homel-memory"
+MINIKUBE_PROFILE="homel"
+
+###############################################################################
+# Utilities
+###############################################################################
+
+die() {
+  echo "[ERROR] $*" >&2
+  exit 1
+}
+
+info() {
+  echo "[INFO] $*"
+}
+
+confirm() {
+  read -r -p "$1 [y/N]: " response
+  [[ "$response" =~ ^[yY]$ ]]
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+###############################################################################
+# Preconditions
+###############################################################################
+
+check_prereqs() {
+  info "Checking prerequisites..."
+
+  for cmd in git kubectl; do
+    command_exists "$cmd" || die "Missing required command: $cmd"
+  done
+
+  if ! command_exists minikube; then
+    echo
+    echo "Minikube is required but not installed."
+    echo "Install it from: https://minikube.sigs.k8s.io/docs/start/"
+    echo
+    die "Minikube not found"
+  fi
+}
+
+###############################################################################
+# Minikube
+###############################################################################
+
+start_minikube() {
+  info "Starting Minikube profile: $MINIKUBE_PROFILE"
+
+  if minikube status -p "$MINIKUBE_PROFILE" >/dev/null 2>&1; then
+    info "Minikube already running"
+    return
+  fi
+
+  minikube start -p "$MINIKUBE_PROFILE"
+}
+
+###############################################################################
+# Repository
+###############################################################################
+
+clone_repo() {
+  if [[ -d ".git" ]]; then
+    info "Running inside repository — skipping clone"
+    return
+  fi
+
+  info "Cloning Memory Steward repository..."
+  git clone "$REPO_URL"
+  cd memory-steward
+}
+
+###############################################################################
+# Kubernetes Bootstrap
+###############################################################################
+
+apply_manifests() {
+  info "Applying Kubernetes manifests..."
+
+  kubectl apply -f k8s/namespace.yaml
+
+  kubectl config set-context --current --namespace="$DEFAULT_NAMESPACE"
+
+  # Core infrastructure
+  kubectl apply -f k8s/postgres.yaml
+  kubectl apply -f k8s/qdrant.yaml
+
+  # Optional dependencies
+  kubectl apply -f k8s/embeddings.yaml
+
+  # Control plane
+  kubectl apply -f k8s/memory-router.yaml
+  kubectl apply -f k8s/memory-steward.yaml
+
+  # Observability
+  kubectl apply -f k8s/grafana/
+}
+
+###############################################################################
+# Database Initialization
+###############################################################################
+
+init_db() {
+  info "Initializing database schema..."
+
+  if ! kubectl get pod -l app=postgres >/dev/null 2>&1; then
+    info "Waiting for Postgres pod..."
+    kubectl wait --for=condition=Ready pod -l app=postgres --timeout=120s
+  fi
+
+  POSTGRES_POD=$(kubectl get pod -l app=postgres -o jsonpath='{.items[0].metadata.name}')
+
+  kubectl exec "$POSTGRES_POD" -- psql -U postgres -f /sql/schema.sql
+  kubectl exec "$POSTGRES_POD" -- psql -U postgres -f /sql/010_telemetry_schema.sql
+}
+
+###############################################################################
+# Help / Usage
+###############################################################################
+
+usage() {
+  cat <<EOF
+
+Memory Steward Installer
+
+Usage:
+  ./install.sh [command]
+
+Commands:
+  install     Full installation (default)
+  up          Start Minikube + apply manifests
+  db-init     Initialize Postgres schema only
+  help        Show this help
+
+Examples:
+  ./install.sh
+  ./install.sh up
+  ./install.sh db-init
+
+EOF
+}
+
+###############################################################################
+# Main
+###############################################################################
+
+main() {
+  local cmd="${1:-install}"
+
+  case "$cmd" in
+    install)
+      check_prereqs
+      clone_repo
+      start_minikube
+      apply_manifests
+      init_db
+      ;;
+    up)
+      check_prereqs
+      start_minikube
+      apply_manifests
+      ;;
+    db-init)
+      init_db
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      die "Unknown command: $cmd"
+      ;;
+  esac
+
+  info "Done."
+}
+
+main "$@"

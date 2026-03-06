@@ -116,6 +116,22 @@ At the end of every major section (H2), insert:
 - [cite_start]**Language:** Always specify the language (e.g., `~~~python`, `~~~sql`, `~~~text`, `~~~mermaid`). [cite: 159]
 - **Context:** Use `text` for pseudo-code or output traces.
 
+
+#### 5.1.1 Outer Fence Exception (Chat/Transcript Rendering Only)
+The canonical code-block delimiter for repository documentation is `~~~` (triple tildes).
+
+However, when reprinting an entire Markdown document inside a conversational medium (e.g., chat, issue comment, ticket) that itself contains internal `~~~` code fences, authors MAY wrap the entire reprinted document in an outer fence using quadruple tildes to prevent premature fence termination.
+
+**Rules:**
+- Repository documentation files MUST continue to use `~~~` for all internal code blocks.
+- The quadruple-tilde outer fence MUST be used only for transcript/reprint contexts, not for committed repository documentation.
+- The outer fence SHOULD specify a language (e.g., `~~~~markdown`) when reprinting Markdown.
+
+**Example (reprinting a doc that contains internal `~~~` fences):**
+~~~~markdown
+[entire document content here, including internal ~~~bash / ~~~text blocks]
+~~~~
+
 ### 5.2 Tables
 - Use standard GFM tables.
 - **Alignment:** Left-align text, center checks/statuses.

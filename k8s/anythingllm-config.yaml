@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: anythingllm-config
+  namespace: homel
+data:
+  anythingllm_mcp_servers.json: |
+    {
+      "mcpServers": {
+        "memory-steward": {
+          "name": "Memory Steward (Glass Pane)",
+          "url": "http://memory-steward-mcp.homel.svc.cluster.local:8081/mcp",
+          "type": "streamable"
+        }
+      }
+    }
+

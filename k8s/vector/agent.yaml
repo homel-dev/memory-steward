@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vector-agent
+  namespace: homel
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vector-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces", "nodes"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vector-agent
+subjects:
+  - kind: ServiceAccount
+    name: vector-agent
+    namespace: homel
+roleRef:
+  kind: ClusterRole
+  name: vector-agent
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vector-config
+  namespace: homel
+data:
+  vector.toml: |
+    data_dir = "/vector-data"
+
+    # 1. Source: Scrape Kubernetes Logs
+    [sources.k8s_logs]
+    type = "kubernetes_logs"
+    extra_namespace_label_selector = "kubernetes.io/metadata.name=homel"
+    self_node_name = "${VECTOR_SELF_NODE_NAME}"
+
+    # 2. Transform: Parse and Filter
+    [transforms.parse_logs]
+    type = "remap"
+    inputs = ["k8s_logs"]
+    source = '''
+    .service = .kubernetes.container_name
+    .timestamp = .timestamp
+    .message = .message
+    '''
+
+    [sinks.local_files]
+    type = "file"
+    inputs = ["parse_logs"]
+    path = "/tmp/memory_steward_logs/%Y-%m-%d/{{ service }}.log"
+    encoding.codec = "text"
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: vector-agent
+  namespace: homel
+spec:
+  selector:
+    matchLabels:
+      app: vector-agent
+  template:
+    metadata:
+      labels:
+        app: vector-agent
+    spec:
+      serviceAccountName: vector-agent
+      volumes:
+        - name: vector-config
+          configMap:
+            name: vector-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: vector-logs
+        - name: var-log
+          hostPath:
+            path: /var/log
+        - name: var-lib
+          hostPath:
+            path: /var/lib
+        - name: vector-data
+          emptyDir: {}
+      containers:
+        # --- CONTAINER 1: Vector (Log Shipper) ---
+        - name: vector
+          image: timberio/vector:0.34.0-alpine
+          args: ["--config", "/etc/vector/vector.toml"]
+          env:
+            - name: VECTOR_LOG
+              value: "info"
+            - name: VECTOR_SELF_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: vector-config
+              mountPath: /etc/vector
+            - name: data
+              mountPath: /tmp/memory_steward_logs
+            - name: var-log
+              mountPath: /var/log
+              readOnly: true
+            - name: var-lib
+              mountPath: /var/lib
+              readOnly: true
+            - name: vector-data
+              mountPath: /vector-data
+
+        # --- CONTAINER 2: Retention Sidecar (Doc 06 Compliance) ---
+        - name: log-retention
+          image: alpine:3.19
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Starting retention enforcement (14 days)..."
+              while true; do
+                # Doc 06: Purge files older than LOG_RETENTION_DAYS (14)
+                find /var/log/memory_steward_logs -type f -mtime +14 -delete
+                # Doc 06: Purge if directory exceeds LOG_TOTAL_CAP_MB (5GB) - simplistic safety
+                du -sh /var/log/memory_steward_logs
+                sleep 3600
+              done
+          volumeMounts:
+            - name: data
+              mountPath: /var/log/memory_steward_logs

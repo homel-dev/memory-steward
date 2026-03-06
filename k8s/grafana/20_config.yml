@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: homel
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: homel-postgres
+        type: postgres
+        access: proxy
+        isDefault: true
+        url: postgres:5432
+        user: homel
+        secureJsonData:
+          password: homel
+        jsonData:
+          database: homel
+          sslmode: disable
+          postgresVersion: 1600
+          timescaledb: false
+
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: homel
+        orgId: 1
+        folder: "homel"
+        type: file
+        disableDeletion: true
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+

@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anythingllm
+  namespace: homel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: anythingllm
+  template:
+    metadata:
+      labels:
+        app: anythingllm
+    spec:
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      initContainers:
+        - name: prep-storage
+          image: busybox:1.36
+          securityContext:
+            runAsUser: 0 # Run as root to fix permissions
+          command: 
+            - sh
+            - -c
+            - |
+              # 1. Create the plugins dir explicitly
+              mkdir -p /storage/plugins
+              
+              # 2. Copy the config file (Injecting it into the volume)
+              cp /config_source/anythingllm_mcp_servers.json /storage/plugins/anythingllm_mcp_servers.json
+              
+              # 3. FIX PERMISSIONS: Ensure user 1000 owns the structure
+              chown -R 1000:1000 /storage/plugins
+          volumeMounts:
+            - name: data
+              mountPath: /storage
+            - name: config
+              mountPath: /config_source
+
+      containers:
+        - name: anythingllm
+          #image: mintplexlabs/anythingllm:latest
+          image: ghcr.io/homel-dev/anything-llm:0.24.2
+          imagePullPolicy: Always
+          env:
+            - name: STORAGE_DIR
+              value: /var/lib/anythingllm
+            - name: LLM_PROVIDER
+              value: generic-openai
+            - name: GENERIC_OPEN_AI_BASE_PATH
+              value: "http://memory-router:8080/v1"
+            - name: GENERIC_OPEN_AI_API_KEY
+              value: "dummy"
+            - name: GENERIC_OPEN_AI_MODEL_PREF
+              value: "NousResearch/Meta-Llama-3-8B-Instruct"
+            - name: GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT
+              value: "1200000"
+            - name: GENERIC_OPEN_AI_MAX_TOKENS
+              value: "512000"
+            - name: DISABLE_TELEMETRY
+              value: "true"
+          ports:
+            - containerPort: 3001
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/anythingllm
+            - name: config
+              mountPath: /var/lib/anythingllm/plugins/anythingllm_mcp_servers.json
+              subPath: anythingllm_mcp_servers.json
+      volumes:
+        - name: config
+          configMap:
+            name: anythingllm-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: anythingllm-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: anythingllm-data
+  namespace: homel
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anythingllm
+  namespace: homel
+spec:
+  selector:
+    app: anythingllm
+  type: ClusterIP
+  ports:
+    - port: 3001
+      targetPort: 3001
+

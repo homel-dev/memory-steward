@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-steward-mcp
+  namespace: homel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: memory-steward-mcp
+  template:
+    metadata:
+      labels:
+        app: memory-steward-mcp
+    spec:
+      containers:
+        - name: mcp
+          image: homel/memory-steward-mcp:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+              name: sse
+          
+          # 1. Runtime Configuration (Qdrant, Limits, Hysteresis, etc.)
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+
+          # 2. Diagnostics Plane Access (Postgres & Logs)
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: homel-postgres
+                  key: POSTGRES_DSN
+            
+            # Application name override for Postgres logs (optional but good for debugging)
+            - name: PGDATABASE
+              value: "homel" 
+            
+            # Explicit Log Directory for the MCP tool to read from
+            - name: LOG_DIR
+              value: "/var/log/memory_steward_logs"
+
+          # 3. Mount Shared Logs (Read-Only)
+          # Allows MCP to read logs from Router/Steward for the 'diagnostics' tools
+          volumeMounts:
+            - name: logs-volume
+              mountPath: /var/log/memory_steward_logs
+              readOnly: true
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+      volumes:
+        # Must match the PVC used by your Vector Agent (Log Aggregator)
+        - name: logs-volume
+          persistentVolumeClaim:
+            claimName: vector-logs
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: memory-steward-mcp
+  namespace: homel
+spec:
+  selector:
+    app: memory-steward-mcp
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: http-sse
+

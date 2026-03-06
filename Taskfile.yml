@@ -1,0 +1,268 @@
+version: '3'
+
+vars:
+  NAMESPACE: homel
+  QDRANT_COLLECTION: homel_memory
+  # Dynamic variable to get the current Postgres pod name safely
+  POSTGRES_POD:
+    sh: kubectl get pod -n {{.NAMESPACE}} -l app=postgres -o jsonpath='{.items[0].metadata.name}' || echo ""
+  INGRESS_HTTP_PORT: '30080'
+  INGRESS_HTTPS_PORT: '30443'
+#  UI_PORT: '30001'
+#  LIST_PORT: '30002'
+#  ENV_FILE: '/etc/minikube-proxy.conf'
+#  UNIT_NAME: 'minikube-proxy@.service'
+#  UNIT_PATH: '/etc/systemd/system/{{.UNIT_NAME}}'
+
+tasks:
+  default:
+    desc: List all tasks
+    cmds:
+      - task --list
+
+  # ============================================================================
+  # 🚀 LIFECYCLE (BOOTSTRAP & TEARDOWN)
+  # ============================================================================
+  up:
+    desc: "Full Bootstrap: Build -> Deploy -> Wait -> Init -> Verify"
+    cmds:
+      - task: build
+      - task: k8s:deploy
+      - task: ingress:setup
+      - task: k8s:wait
+      - task: db:init
+      - task: verify:health
+
+  down:
+    desc: "Teardown: Delete Namespace"
+    cmds:
+      - kubectl delete namespace {{.NAMESPACE}} --ignore-not-found
+
+  status:all:
+    desc: "Status"
+    cmds:
+      - kubectl get pods -n {{.NAMESPACE}}
+      - kubectl get svc -n {{.NAMESPACE}}
+
+  nuke:
+    desc: "🔥 DESTRUCTIVE: Delete Namespace and ALL Persistent Volumes"
+    prompt: "This will destroy all memory and logs. Continue?"
+    cmds:
+      # curl -fsS -X DELETE "$QDRANT_URL/collections/$QDRANT_COLLECTION"
+      - |
+        kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
+          set -eu
+          BASE="http://qdrant:6333"
+          COL="{{.QDRANT_COLLECTION}}"
+          curl -fsS -X DELETE "$QDRANT_URL/collections/$QDRANT_COLLECTION"
+        '
+      - task: down
+      - kubectl delete pvc --all --all-namespaces --force --grace-period=0
+
+  # ============================================================================
+  # 🐳 BUILD
+  # ============================================================================
+  build:
+    desc: "Build Docker images into Minikube registry"
+    cmds:
+      - minikube image build -t homel/embeddings:dev ./components/embeddings
+      - minikube image build -t homel/memory-router:dev ./components/memory_router
+      - minikube image build -t homel/memory-steward:dev ./components/memory_steward
+      - minikube image build -t homel/memory-steward-mcp:dev ./components/memory_steward_mcp
+      - minikube image build -t homel/memory-steward-list:dev ./components/memory_steward_list
+
+
+  # ============================================================================
+  # ☸️ KUBERNETES OPERATIONS
+  # ============================================================================
+  k8s:deploy:
+    desc: "Apply manifests"
+    cmds:
+      - kubectl apply -f k8s/namespace.yaml
+      - kubectl apply -f k8s/
+      - kubectl apply -f k8s/vector/
+      - kubectl apply -f k8s/grafana/
+
+  k8s:wait:
+    desc: "Block until core services are Ready"
+    cmds:
+      - echo "Waiting for StatefulSets..."
+      - kubectl rollout status -n {{.NAMESPACE}} statefulset/postgres --timeout=120s
+      - kubectl rollout status -n {{.NAMESPACE}} statefulset/qdrant --timeout=120s
+      - echo "Waiting for Deployments..."
+      - kubectl rollout status -n {{.NAMESPACE}} deployment/memory-router --timeout=120s
+      - kubectl rollout status -n {{.NAMESPACE}} deployment/memory-steward --timeout=120s
+
+  k8s:restart:
+    desc: "Restart all core services (fast redeploy)"
+    cmds:
+      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-router
+      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward
+      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward-mcp
+      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward-list
+
+  # ============================================================================
+  # 💾 DATA & STATE (INIT)
+  # ============================================================================
+  db:init:
+    desc: "Idempotent DB Init (Postgres Schema + Qdrant Collection)"
+    deps: [db:init-pg, db:init-qdrant]
+
+  db:init-pg:
+    internal: true
+    cmds:
+      - |
+        echo "Applying SQL schemas..."
+        cat sql/schema.sql sql/010_telemetry_schema.sql | \
+        kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
+        psql -U homel -d homel -v ON_ERROR_STOP=1
+
+  db:init-qdrant:
+    internal: true
+    cmds:
+      - |
+        echo "Initializing Qdrant..."
+        kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
+          set -eu
+          BASE="http://qdrant:6333"
+          COL="{{.QDRANT_COLLECTION}}"
+
+          # Create Collection
+          if curl -fsS "$BASE/collections/$COL" >/dev/null; then
+            curl -fsS -X DELETE "$BASE/collections/$COL"
+          fi  
+          
+          curl -fsS -X PUT "$BASE/collections/$COL" \
+              -H "Content-Type: application/json" \
+              -d "{\"vectors\":{\"dense\":{\"size\":384,\"distance\":\"Cosine\"}},\"sparse_vectors\":{\"lexical\":{\"modifier\":\"idf\"}},\"on_disk_payload\":true}"
+          echo "Collection $COL created"
+
+          # Create Payload Indexes
+          idx() {
+            curl -fsS -X PUT "$BASE/collections/$COL/index?wait=true" \
+              -H "Content-Type: application/json" \
+              -d "{\"field_name\":\"$1\",\"field_schema\":\"$2\"}" >/dev/null
+            echo "Indexed: $1"
+          }
+
+          idx project_id   keyword
+          idx memory_type  keyword
+          idx scope        keyword
+          idx source       keyword
+          idx product      keyword
+          idx version      keyword
+          idx chunk_id     keyword
+          idx origin_hash  keyword
+          idx confidence   float
+          idx ingested_at  datetime
+        '
+
+  db:shell:
+    desc: "Open generic PSQL shell"
+    interactive: true
+    cmds:
+      - kubectl exec -it -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- psql -U homel -d homel
+
+  # ============================================================================
+  # ✅ VERIFICATION (DOC 08 COMPLIANCE)
+  # ============================================================================
+  verify:health:
+    desc: "Check healthz endpoints for all services"
+    cmds:
+      - echo "Checking Router..." && kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://localhost:8080/healthz
+      - echo "Checking Steward..." && kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://memory-steward:8090/healthz
+
+  verify:flow:
+    desc: "Run E2E Memory Test (Phase 1-3 from Doc 8)"
+    cmds:
+      - |
+        echo "Phase 1: Chat Request..."
+        kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- \
+          curl -s -X POST http://localhost:8080/v1/chat/completions \
+          -H "Content-Type: application/json" \
+          -d '{"message": "My project code is 994", "project_id": "test-e2e"}'
+        
+        echo ""
+        echo "Phase 2: Waiting for Async Admission (3s)..."
+        sleep 3
+      
+        echo "Phase 3: Verifying Persistence..."
+        kubectl exec -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
+          psql -U homel -d homel -t -c "SELECT count(*) FROM dynamic_memory WHERE content LIKE '%994%';" | grep -q "1" && echo "✅ PASS: Memory Persisted" || echo "❌ FAIL: Memory Not Found"
+
+  # ============================================================================
+  # 🛠️ DEVELOPER UTILITIES
+  # ============================================================================
+  logs:router:
+    desc: "Tail Router Logs"
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} -l app=memory-router -f
+
+  logs:steward:
+    desc: "Tail Steward Logs"
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} -l app=memory-steward -f
+
+  # ============================================================================
+  # 🌐 INGRESS ROUTING
+  # ============================================================================
+  ingress:setup:
+    desc: "Bootstrap Ingress, generate in-cluster TLS cert, and apply routing"
+    cmds:
+      - minikube addons enable ingress
+      - |
+        IP=$(minikube ip 2>/dev/null || echo "")
+        HOST_IP=$(hostname -I | awk '{print $1}')
+        
+        kubectl run tls-gen --rm -i --restart=Never \
+          --env="IP=$IP" \
+          --env="HOST_IP=$HOST_IP" \
+          --image=alpine:3.19 -- sh -c "
+          apk add --no-cache openssl >/dev/null 2>&1
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /tmp/tls.key -out /tmp/tls.crt \
+            -subj '/CN=srv100' \
+            -addext \"subjectAltName = IP:\$IP,IP:\$HOST_IP,DNS:localhost,DNS:srv100\" >/dev/null 2>&1
+          echo 'CERT_START' && cat /tmp/tls.crt && echo 'CERT_END'
+          echo 'KEY_START' && cat /tmp/tls.key && echo 'KEY_END'
+        " > /tmp/tls_output.txt
+        
+        awk '/CERT_START/{flag=1; next} /CERT_END/{flag=0} flag' /tmp/tls_output.txt > /tmp/tls.crt
+        awk '/KEY_START/{flag=1; next} /KEY_END/{flag=0} flag' /tmp/tls_output.txt > /tmp/tls.key
+        
+        kubectl create secret tls memory-steward-tls --cert=/tmp/tls.crt --key=/tmp/tls.key -n {{.NAMESPACE}} --dry-run=client -o yaml | kubectl apply -f -
+        
+        rm -f /tmp/tls_output.txt /tmp/tls.crt /tmp/tls.key
+      - kubectl apply -f k8s/ingress.yaml
+
+  ingress:export-cert:
+    desc: "Export public certificate for physical client trust store"
+    cmds:
+      - kubectl get secret memory-steward-tls -n {{.NAMESPACE}} -o jsonpath="{.data['tls\.crt']}" | base64 -d > srv100_public.crt
+      - echo "✅ Saved srv100_public.crt"
+      - echo "Action Required - Import this file into your client OS/Chrome Trusted Root Certification Authorities"
+
+  ingress:forward:
+    desc: "Expose Ingress controller to 0.0.0.0 on ports {{.INGRESS_HTTP_PORT}}/{{.INGRESS_HTTPS_PORT}} (Background)"
+    cmds:
+      - |
+        if pgrep -f "kubectl port-forward -n ingress-nginx services/ingress-nginx-controller" > /dev/null; then
+          echo "Port-forward is already running."
+        else
+          nohup kubectl port-forward -n ingress-nginx services/ingress-nginx-controller --address 0.0.0.0 {{.INGRESS_HTTP_PORT}}:80 {{.INGRESS_HTTPS_PORT}}:443 > /tmp/ingress-forward.log 2>&1 &
+          echo $! > /tmp/ingress-forward.pid
+          echo "✅ Port-forward running in background on ports {{.INGRESS_HTTP_PORT}} and {{.INGRESS_HTTPS_PORT}} (PID: $(cat /tmp/ingress-forward.pid))"
+          echo "Logs available at: /tmp/ingress-forward.log"
+        fi
+
+  ingress:unforward:
+    desc: "Stop the background Ingress port-forward"
+    cmds:
+      - |
+        if [ -f /tmp/ingress-forward.pid ]; then
+          kill $(cat /tmp/ingress-forward.pid) 2>/dev/null || true
+          rm /tmp/ingress-forward.pid
+        fi
+        pkill -f "kubectl port-forward -n ingress-nginx" || true
+        echo "🛑 Port-forward stopped."
+
