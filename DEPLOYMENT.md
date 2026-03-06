@@ -22,20 +22,20 @@ This document defines the operational entry points required to install and run M
 ### 1.1 Canonical Install Entry Point (Cloudflare Worker)
 The canonical installation UX MUST use the `sh.homel.dev` bootstrap endpoint:
 
-~~bash
+~~~bash
 curl -fsSL https://sh.homel.dev/install-ms.sh | bash
-~~
+~~~
 
 **Behavior:**
 - `sh.homel.dev` is intentionally proxied by Cloudflare.
 - A Cloudflare Worker is bound to `sh.homel.dev` and handles specific install-script paths.
 - For `install-ms.sh`, the Worker returns a redirect-only response:
 
-~~text
+~~~text
 HTTP/2 302
 Location: https://raw.githubusercontent.com/homel-dev/memory-steward/main/install/install.sh
 Content-Length: 0
-~~
+~~~
 
 **Hard Invariant:** This Cloudflare Worker + redirect dispatcher pattern is intentional. It MUST NOT be treated as suspicious or “broken DNS”.
 
@@ -47,9 +47,9 @@ The bootstrap pattern works because:
 > **Warning:** If you omit `-L`, `curl` will not follow the redirect and the install will fail.
 
 **Recommended hardened form:**
-~~bash
+~~~bash
 curl -fsSL -L https://sh.homel.dev/install-ms.sh | bash
-~~
+~~~
 
 [Back to top](#navigation)
 
@@ -85,9 +85,9 @@ Ingress is enabled by default during installation. The concrete URL depends on y
 
 You MAY use Minikube IP to reach the ingress controller:
 
-~~bash
+~~~bash
 minikube -p homel ip
-~~
+~~~
 
 > **Warning:** If `k8s/ingress.yaml` uses host-based routing (e.g., `homel.dev`), you MUST map that hostname to the chosen IP (e.g., via `/etc/hosts`) or use a DNS solution that resolves it.
 
@@ -98,22 +98,22 @@ minikube -p homel ip
 ## 5. Operational Commands
 
 ### 5.1 Apply Manifests
-~~bash
+~~~bash
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -n homel -f k8s/
-~~
+~~~
 
 ### 5.2 Check Status
-~~bash
+~~~bash
 kubectl get pods -n homel
 kubectl get svc -n homel
-~~
+~~~
 
 ### 5.3 Logs
-~~bash
+~~~bash
 kubectl logs -n homel -l app=memory-router -f
 kubectl logs -n homel -l app=memory-steward -f
-~~
+~~~
 
 [Back to top](#navigation)
 
@@ -124,9 +124,9 @@ kubectl logs -n homel -l app=memory-steward -f
 This repository publishes component images to GitHub Container Registry (GHCR).
 
 Image namespace:
-~~text
+~~~text
 ghcr.io/homel-dev/memory-steward/<component>:<version>
-~~
+~~~
 
 Components include:
 - `embeddings`
