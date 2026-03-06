@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: homel-postgres
+  namespace: homel
+type: Opaque
+stringData:
+  POSTGRES_USER: "homel"
+  POSTGRES_PASSWORD: "homel"
+  POSTGRES_DB: "homel"
+  POSTGRES_DSN: "postgresql://homel:homel@postgres:5432/homel?sslmode=disable&application_name=memory-router"
+

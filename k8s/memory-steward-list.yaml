@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-steward-list
+  namespace: homel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: memory-steward-list
+  template:
+    metadata:
+      labels:
+        app: memory-steward-list
+    spec:
+      volumes:
+        # Shared cache prevents re-downloading models (3GB+) on restart.
+        # Assumes 'hf-cache' PVC exists (shared with vLLM).
+        # If no PVC exists yet, switch to emptyDir.
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hf-cache
+
+      containers:
+        - name: list
+          image:  ghcr.io/homel-dev/memory-steward/memory-steward-list:0.1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8001
+          
+          # -----------------------------------------------------------
+          # CONFIGURATION: Runtime Contract
+          # -----------------------------------------------------------
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+          
+          # -----------------------------------------------------------
+          # HARD INVARIANT (Doc 12):
+          # NO POSTGRES SECRET MOUNTED.
+          # This service is strictly isolated from the database.
+          # -----------------------------------------------------------
+
+          env:
+            - name: HF_HOME
+              value: /root/.cache/huggingface
+            
+            # --- [GPU CONFIG SWITCH] ---
+            # 1. For CPU (Default):
+            - name: DEVICE
+              value: "cpu"
+            - name: COMPUTE_TYPE
+              value: "int8"
+            
+            # 2. For GPU (Uncomment these, comment out above):
+            # - name: DEVICE
+            #   value: "cuda"
+            # - name: COMPUTE_TYPE
+            #   value: "float16"
+            # - name: NVIDIA_VISIBLE_DEVICES
+            #   value: "all"
+          
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+              # --- [GPU RESOURCE SWITCH] ---
+              # Uncomment to request GPU slice:
+              # nvidia.com/gpu: "1"
+
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: memory-steward-list
+  namespace: homel
+spec:
+  selector:
+    app: memory-steward-list
+  type: NodePort
+  ports:
+    - port: 8001
+      targetPort: 8001
+      nodePort: 30002
+

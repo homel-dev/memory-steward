@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-steward-list"
+version = "0.1.0"
+description = "Local Input Speech Transcriber (LIST) extension for Memory Steward"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+
+authors = [
+  { name = "HomeL(ab) Dev", email = "opensource@homel.dev" }
+]
+
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "python-multipart>=0.0.9",
+  "faster-whisper>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.3",
+  "mypy>=1.8",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

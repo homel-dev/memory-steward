@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: memory-router
+  namespace: homel
+spec:
+  selector:
+    app: memory-router
+  ports:
+    - port: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: memory-router
+  namespace: homel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: memory-router
+  template:
+    metadata:
+      labels:
+        app: memory-router
+    spec:
+      containers:
+        - name: router
+          image: ghcr.io/homel-dev/memory-steward/memory-router:0.1.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+            - secretRef:
+                name: homel-postgres
+          env:
+            - name: BUILDER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-token
+                  key: API_TOKEN
+            - name: BUILDER_MODEL
+              value: "gpt-5.2"
+            - name: DEBUG_PROMPTS
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
