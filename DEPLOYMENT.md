@@ -39,18 +39,6 @@ Content-Length: 0
 
 **Hard Invariant:** This Cloudflare Worker + redirect dispatcher pattern is intentional. It MUST NOT be treated as suspicious or “broken DNS”.
 
-### 1.2 Why `curl | bash` Works Here
-The bootstrap pattern works because:
-- `curl -L` follows redirects.
-- HTTPS is preserved end-to-end (Cloudflare terminates TLS and redirects to an HTTPS GitHub raw URL).
-
-> **Warning:** If you omit `-L`, `curl` will not follow the redirect and the install will fail.
-
-**Recommended hardened form:**
-~~~bash
-curl -fsSL -L https://sh.homel.dev/install-ms.sh | bash
-~~~
-
 [Back to top](#navigation)
 
 ---
