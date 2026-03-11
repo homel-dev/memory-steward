@@ -54,7 +54,7 @@ tasks:
           set -eu
           BASE="http://qdrant:6333"
           COL="{{.QDRANT_COLLECTION}}"
-          curl -fsS -X DELETE "$QDRANT_URL/collections/$QDRANT_COLLECTION"
+          curl -fsS -X DELETE "$BASE/collections/$COL"
         '
       - task: down
       - kubectl delete pvc --all --all-namespaces --force --grace-period=0

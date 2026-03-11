@@ -11,7 +11,7 @@ import threading
 import time
 import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
 
 import numpy as np
@@ -113,7 +113,15 @@ app = FastAPI(
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Union[str, List[Dict[str, Any]]]
+
+    @property
+    def text_content(self) -> str:
+        """Safely extracts text for router logic, ignoring base64 images/files"""
+        if isinstance(self.content, str):
+            return self.content
+        # If it's a multimodal list, join all the "text" elements
+        return " ".join([item.get("text", "") for item in self.content if item.get("type") == "text"])
 
 
 class ChatCompletionRequest(BaseModel):
@@ -622,7 +630,9 @@ def chat(req: ChatCompletionRequest, http_req: Request):
     model_requested = (req.model or "").strip() or None
 
     try:
-        user_text = next(m.content for m in reversed(req.messages) if m.role == "user")
+        user_msg = next(m for m in reversed(req.messages) if m.role == "user")
+        user_text = user_msg.text_content
+        #user_text = next(m.content for m in reversed(req.messages) if m.role == "user")
     except StopIteration:
         return {"choices": [{"message": {"role": "assistant", "content": "Ready."}}]}
 
@@ -675,7 +685,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         
         # Slide window backwards to keep most recent context
         for m in reversed(history_msgs):
-            m_tok = _count_tokens(model, m.content)
+            m_tok = _count_tokens(model, m.text_content)
             if current_hist_tokens + m_tok > allowed_history_tokens:
                 break
             pruned_history.insert(0, m)
@@ -724,7 +734,13 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         if DEBUG_PROMPTS:
             log.info("debug.prompt request_id=%s upstream_msgs=%s", request_id, json.dumps(upstream_msgs, indent=2))
 
-        prompt_tokens = sum(_count_tokens(model, m["content"]) for m in upstream_msgs)
+        #prompt_tokens = sum(_count_tokens(model, m["content"]) for m in upstream_msgs)
+        def _safe_count(c):
+            if isinstance(c, str): return _count_tokens(model, c)
+            return _count_tokens(model, " ".join(i.get("text", "") for i in c if i.get("type") == "text"))
+
+        prompt_tokens = sum(_safe_count(m["content"]) for m in upstream_msgs)
+
         log.info("prompt.tokens=%d model=%s request_id=%s", prompt_tokens, model, request_id)
 
         payload = {
