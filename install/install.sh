@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_NAME="memory-steward-installer"
 REPO_URL="https://github.com/homel-dev/memory-steward.git"
 DEFAULT_NAMESPACE="homel"
-MINIKUBE_PROFILE="homel"
+MINIKUBE_PROFILE="minikube"
 
 die() { echo "[ERROR] $*" >&2; exit 1; }
 info() { echo "[INFO] $*"; }
