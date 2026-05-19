@@ -480,8 +480,10 @@ def _assemble_context(
     )
 
     # Extract Last N turns
+    # Use text_content for the dialogue summary so base64 blobs don't bloat
+    # the canonical envelope (which is a JSON string, not an upstream payload).
     dialogue_history = [
-        {"role": m.role, "content": m.content} 
+        {"role": m.role, "content": m.text_content}
         for m in recent_messages[-4:]
     ]
 
@@ -726,9 +728,11 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             dropped_other=0,
         )
 
-        upstream_msgs: List[Dict[str, str]] = []
+        upstream_msgs: List[Dict[str, Any]] = []
         if system_ctx.strip():
             upstream_msgs.append({"role": "system", "content": system_ctx})
+        # model_dump() preserves content as str *or* list[dict] (multimodal),
+        # which is what the builder expects for image/file attachments.
         upstream_msgs.extend([m.model_dump() for m in req.messages])
 
         if DEBUG_PROMPTS:
@@ -809,12 +813,17 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             request_id,
         )
 
+        # Pass the full original messages so the steward sees text content.
+        # Use text_content extraction so base64 blobs are not stored in memory.
+        admit_messages = [
+            {"role": m.role, "content": m.text_content}
+            for m in req.messages
+            if m.role == "user" and m.text_content.strip()
+        ]
         _async_admit(
             request_id=request_id,
             project_id=pid,
-            messages=[
-                {"role": "user", "content": user_text},
-            ],
+            messages=admit_messages,
         )
 
         log.info(
