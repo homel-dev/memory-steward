@@ -1,7 +1,7 @@
 # memory_router/server.py
 """
-homel-memory-router
-High-Grade Engineering Edition: MMR + Semantic Stitching
+memory-router
+MMR + Semantic Stitching
 """
 
 import os
