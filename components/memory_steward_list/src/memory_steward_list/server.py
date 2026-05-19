@@ -42,6 +42,7 @@ def healthz():
     """Liveness probe."""
     return {"ok": True, "service": "memory-steward-list"}
 
+@app.post("/v1/audio/transcriptions", status_code=200)
 @app.post("/v1/list/transcribe", status_code=200)
 async def transcribe(file: UploadFile = File(...)):
     """
