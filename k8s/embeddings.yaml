@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: embeddings
-  namespace: homel
+  namespace: ms
 spec:
   selector:
     app: embeddings
@@ -13,7 +13,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: embeddings
-  namespace: homel
+  namespace: ms
 spec:
   replicas: 1
   selector:

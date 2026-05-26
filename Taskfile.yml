@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  NAMESPACE: homel
+  NAMESPACE: ms
   QDRANT_COLLECTION: homel_memory
   # Dynamic variable to get the current Postgres pod name safely
   POSTGRES_POD:
@@ -24,9 +24,9 @@ tasks:
   # 🚀 LIFECYCLE (BOOTSTRAP & TEARDOWN)
   # ============================================================================
   up:
-    desc: "Full Bootstrap: Build -> Deploy -> Wait -> Init -> Verify"
+    desc: "Full Bootstrap: Bootstrap -> Deploy -> Wait -> Init -> Verify"
     cmds:
-      - task: build
+      - minikube start --driver=docker --cpus=8 --memory=16384
       - task: k8s:deploy
       - task: ingress:setup
       - task: k8s:wait

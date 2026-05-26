@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: homel-postgres
-  namespace: homel
+  namespace: ms
 type: Opaque
 stringData:
   POSTGRES_USER: "homel"

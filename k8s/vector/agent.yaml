@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: vector-agent
-  namespace: homel
+  namespace: ms
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -20,7 +20,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: vector-agent
-    namespace: homel
+    namespace: ms
 roleRef:
   kind: ClusterRole
   name: vector-agent
@@ -30,7 +30,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vector-config
-  namespace: homel
+  namespace: ms
 data:
   vector.toml: |
     data_dir = "/vector-data"
@@ -38,7 +38,7 @@ data:
     # 1. Source: Scrape Kubernetes Logs
     [sources.k8s_logs]
     type = "kubernetes_logs"
-    extra_namespace_label_selector = "kubernetes.io/metadata.name=homel"
+    extra_namespace_label_selector = "kubernetes.io/metadata.name=ms"
     self_node_name = "${VECTOR_SELF_NODE_NAME}"
 
     # 2. Transform: Parse and Filter
@@ -61,7 +61,7 @@ apiVersion: apps/v1
 kind: DaemonSet
 metadata:
   name: vector-agent
-  namespace: homel
+  namespace: ms
 spec:
   selector:
     matchLabels:
