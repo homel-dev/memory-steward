@@ -122,7 +122,7 @@ sequenceDiagram
 
     rect rgb(255,243,224)
         note right of R: Cold Path (Asynchronous)
-        R->>)S: Fire-and-Forget Signal
+        R->>S: Fire-and-Forget Signal
         S->>S: Extract Atomic Facts
         S->>DB: Upsert Memory
     end
