@@ -8,7 +8,7 @@ vars:
     sh: kubectl get pod -n {{.NAMESPACE}} -l app=postgres -o jsonpath='{.items[0].metadata.name}' || echo ""
   INGRESS_HTTP_PORT: '30080'
   INGRESS_HTTPS_PORT: '30443'
-#  UI_PORT: '30001'
+#  UI_PORT: '30080'  # open-webui is served via ingress, not NodePort
 #  LIST_PORT: '30002'
 #  ENV_FILE: '/etc/minikube-proxy.conf'
 #  UNIT_NAME: 'minikube-proxy@.service'
@@ -100,6 +100,7 @@ tasks:
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward-mcp
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward-list
+      - kubectl rollout restart -n {{.NAMESPACE}} deployment/open-webui
 
   # ============================================================================
   # 💾 DATA & STATE (INIT)
@@ -265,4 +266,3 @@ tasks:
         fi
         pkill -f "kubectl port-forward -n ingress-nginx" || true
         echo "🛑 Port-forward stopped."
-
