@@ -1,7 +1,15 @@
+<img src="docs/img/logo.jpeg" width="100">
+
 # MEMORY STEWARD
 ## A Deterministic Cognitive Control Plane for LLM Systems
 ### Foundational Engineering Specification (Root Document)
 *Namespace: memory-steward • Owner: architecture-team*
+
+
+[![CI](https://github.com/homel-dev/memory-steward/actions/workflows/main.yml/badge.svg)](https://github.com/homel-dev/memory-steward/actions/workflows/main.yml)
+[![Python](https://img.shields.io/badge/python-3.13-4a8ab8)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-4a8a5a)](LICENSE-2.0.txt)
+[![homel.dev](https://img.shields.io/badge/org-homel.dev-6a5a9a)](https://hommel.dev)
 
 ---
 
