@@ -8,7 +8,7 @@ import os
 import logging
 import psycopg
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse  # kept for potential future use
 from fastmcp import FastMCP
 from memory_steward_mcp.config import (
     POSTGRES_DSN, LOG_DIR, QDRANT_URL, MAX_CONTEXT_TOKENS, 
@@ -116,11 +116,9 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
         except Exception as e:
             health["embeddings"] = f"error: {str(e)}"
 
-        list_url = os.environ.get("LIST_URL", "http://memory-steward-list:8001/v1/list/transcribe")
+        list_url = os.environ.get("LIST_URL", "http://memory-steward-list:8001")
         try:
-            parsed = urlparse(list_url)
-            base_url = f"{parsed.scheme}://{parsed.netloc}/ping"
-            r = requests.get(base_url, timeout=2)
+            r = requests.get(f"{list_url.rstrip('/')}/healthz", timeout=2)
             health["list_transcribe"] = "ok" if r.ok else f"degraded: {r.status_code}"
         except Exception as e:
             health["list_transcribe"] = f"error: {str(e)}"

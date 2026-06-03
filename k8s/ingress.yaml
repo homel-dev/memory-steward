@@ -23,6 +23,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: anythingllm
+                name: open-webui
                 port:
-                  number: 3001
+                  number: 8080

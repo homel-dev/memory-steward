@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-webui
+  namespace: ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: open-webui
+  template:
+    metadata:
+      labels:
+        app: open-webui
+    spec:
+      containers:
+        - name: open-webui
+          image: ghcr.io/open-webui/open-webui:main
+          imagePullPolicy: Always
+          env:
+            # --- LLM backend: memory-router ---
+            - name: ENABLE_OPENAI_API
+              value: "true"
+            - name: OPENAI_API_BASE_URL
+              value: "http://memory-router:8080/v1"
+            - name: OPENAI_API_KEY
+              value: "dummy"
+            - name: ENABLE_OLLAMA_API
+              value: "false"
+
+            # --- STT: point at LIST service ---
+            # LIST now also serves /v1/audio/transcriptions (see list_server.py fix)
+            - name: AUDIO_STT_ENGINE
+              value: "openai"
+            - name: AUDIO_STT_OPENAI_API_BASE_URL
+              value: "http://memory-steward-list:8001/v1"
+            - name: AUDIO_STT_OPENAI_API_KEY
+              value: "dummy"
+            - name: AUDIO_STT_MODEL
+              value: "whisper-1"
+
+            # --- Auth & security ---
+            # WEBUI_SECRET_KEY must be stable across restarts (used to encrypt stored credentials)
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-token
+                  key: API_TOKEN
+            - name: WEBUI_AUTH
+              value: "false"
+
+            - name: DISABLE_TELEMETRY
+              value: "true"
+
+            # NOTE: MCP tool server (memory-steward-mcp) cannot be pre-configured
+            # via environment variables — Open WebUI has no env var for this.
+            # One-time setup after first deploy:
+            #   Admin Settings -> External Tools -> + -> Type: MCP (Streamable HTTP)
+            #   URL: http://memory-steward-mcp.homel.svc.cluster.local:8081/mcp
+            #   Auth: None
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: data
+              mountPath: /app/backend/data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: open-webui-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: open-webui-data
+  namespace: ms
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui
+  namespace: ms
+spec:
+  selector:
+    app: open-webui
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080

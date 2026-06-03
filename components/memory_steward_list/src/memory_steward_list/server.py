@@ -42,6 +42,7 @@ def healthz():
     """Liveness probe."""
     return {"ok": True, "service": "memory-steward-list"}
 
+@app.post("/v1/audio/transcriptions", status_code=200)
 @app.post("/v1/list/transcribe", status_code=200)
 async def transcribe(file: UploadFile = File(...)):
     """
@@ -100,4 +101,3 @@ if __name__ == "__main__":
     import uvicorn
     # Host 0.0.0.0 to allow container access
     uvicorn.run("memory_steward_list.server:app", host="0.0.0.0", port=8001, reload=False)
-
