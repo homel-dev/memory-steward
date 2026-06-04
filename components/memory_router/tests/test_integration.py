@@ -13,6 +13,7 @@ import json
 import sys
 import types
 import pytest
+import importlib
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
@@ -47,7 +48,6 @@ _stub("memory_router.mcp_bridge",
     }))
 )
 
-import importlib
 router_server = importlib.import_module("memory_router.server")
 client = TestClient(router_server.app)
 
