@@ -1,52 +1,51 @@
-
 # BEYOND RAG: ARCHITECTING DETERMINISM
+
 ## The Memory Steward Engineering Manifesto
 
----
+-----
 
 ## 1. Abstract
 
-Standard Retrieval-Augmented Generation (RAG) is failing production engineering. By relying on summarization, implicit context, and probabilistic storage, traditional RAG systems suffer from "context drift" and hallucination loops.
+Standard Retrieval-Augmented Generation (RAG) is failing production engineering. By relying on summarization, implicit context, and probabilistic storage, traditional RAG systems suffer from “context drift” and hallucination loops.
 
 **Memory Steward** introduces a dual-plane architecture that treats memory as a **deterministic control system**, not a chat log. We propose a separation of concerns: a **Data Plane** for conversation and a **Control Plane** for memory governance, bridged by strict operational modes and an atomic persistence strategy.
 
----
+-----
 
-## 2. The Problem: The "Alignment Tax" of Memory
+## 2. The Problem: The “Alignment Tax” of Memory
 
 Current LLM memory systems typically rely on two flawed mechanisms:
 
-1. **Summarization:** Compressing conversation history into smaller prompts. This loses nuance and creates a "telephone game" effect where facts degrade over time.
-2. **Implicit Injection:** Dumping "relevant" chunks into the context window without validating their utility or truth.
+1. **Summarization:** Compressing conversation history into smaller prompts. This loses nuance and creates a “telephone game” effect where facts degrade over time.
+1. **Implicit Injection:** Dumping “relevant” chunks into the context window without validating their utility or truth.
 
-We call this **"Probabilistic Drift."** When the model is responsible for deciding what to remember, it creates a feedback loop of its own biases. To solve this, we must remove the "decision to remember" from the "act of chatting."
+We call this **“Probabilistic Drift.”** When the model is responsible for deciding what to remember, it creates a feedback loop of its own biases. To solve this, we must remove the “decision to remember” from the “act of chatting.”
 
-
----
+-----
 
 ## 3. The Solution: Dual-Plane Architecture
 
-Memory Steward splits the system into two distinct active components, separating the "act of speaking" from the "act of remembering."
+Memory Steward splits the system into two distinct active components, separating the “act of speaking” from the “act of remembering.”
 
 ### 3.1 The Data Plane (Memory Router)
 
-The fast, stateless "receptionist." It handles user I/O, performs read-only vector search, and assembles the prompt. **Crucially, it never writes to long-term memory.**
+The fast, stateless “receptionist.” It handles user I/O, performs read-only vector search, and assembles the prompt. **Crucially, it never writes to long-term memory.**
 
-The UI layer (AnythingLLM UI) is a presentation surface only and is not a source of truth, does not own memory, and does not participate in memory admission decisions.
+The UI layer (Open WebUI) is a presentation surface only and is not a source of truth, does not own memory, and does not participate in memory admission decisions.
 The Builder LLM is used strictly as an inference backend and has no memory authority or persistence rights.
 
 ### 3.2 The Control Plane (Memory Steward)
 
-The slow, thoughtful "librarian." It observes the chat asynchronously. It decides what facts are worth keeping, sanitizes them, and injects them into the database. **Crucially, it never speaks to the user.**
+The slow, thoughtful “librarian.” It observes the chat asynchronously. It decides what facts are worth keeping, sanitizes them, and injects them into the database. **Crucially, it never speaks to the user.**
 
 The Memory Steward acts as an explicit admission controller: it governs memory writes and never participates in prompt generation or user interaction.
 
 ### 3.3 C4 Container Diagram
 
-~~~mermaid
+```mermaid
 graph TD
     User((User))
-    UI[AnythingLLM UI - Non-authoritative]
+    UI[Open WebUI - Non-authoritative]
 
     subgraph "Data Plane"
         Router[Memory Router]
@@ -85,9 +84,9 @@ graph TD
     Steward -->|Persist| DB
     Steward -->|Upsert| Qdrant
     Steward -.->|Audit| Logs
-~~~
+```
 
----
+-----
 
 ## 4. The Async Lifecycle (Hot vs. Cold Paths)
 
@@ -97,10 +96,10 @@ As shown below, the user receives their response *before* the system even begins
 
 ### 4.1 Request Sequence Diagram
 
-~~~mermaid
+```mermaid
 sequenceDiagram
     participant U as User
-    participant UI as UI
+    participant UI as Open WebUI
     participant R as Memory Router
     participant B as Builder LLM
     participant S as Memory Steward
@@ -122,46 +121,46 @@ sequenceDiagram
 
     rect rgb(255,243,224)
         note right of R: Cold Path (Asynchronous)
-        R->>S: Fire-and-Forget Signal
+        R->>)S: Fire-and-Forget Signal
         S->>S: Extract Atomic Facts
         S->>DB: Upsert Memory
     end
-~~~
+```
 
----
+-----
 
 ## 5. Philosophy: Atomicity & Operational Modes
 
 ### 5.1 Atomicity Over Aggregation
 
-Most systems store "summaries." Memory Steward stores **Atoms**: discrete, immutable facts.
+Most systems store “summaries.” Memory Steward stores **Atoms**: discrete, immutable facts.
 
-- **Example:** *"Project ID is 994"* (Atom) vs. *"The user talked about their project"* (Summary)
+- **Example:** *“Project ID is 994”* (Atom) vs. *“The user talked about their project”* (Summary)
 - **Result:** A self-healing knowledge graph, not a muddy log file.
 
 ### 5.2 Operational Modes & Hysteresis
 
 A chat system should behave differently when debugging code vs. brainstorming ideas. The system detects intent and switches modes (e.g., **Engineering** vs. **Casual**).
 
-To prevent "Mode Jitter," the system employs **Hysteresis**: a temporal decay function that resists changing modes unless the signal is overwhelming.
+To prevent “Mode Jitter,” the system employs **Hysteresis**: a temporal decay function that resists changing modes unless the signal is overwhelming.
 
 [Back to top](#navigation)
 
----
+-----
 
-## 6. The "Glass Pane": ChatOps for Memory
+## 6. The “Glass Pane”: ChatOps for Memory
 
-Black-box AI systems are a liability. Memory Steward implements a **Management Interface** via the **Model Context Protocol (MCP)**. This allows operators to inspect, debug, and tune the Steward using natural language.
+Black-box AI systems are a liability. Memory Steward implements a **Management Interface** via the **Model Context Protocol (MCP)**. This allows operators to inspect, debug, and tune the Steward using natural language directly from the Open WebUI chat interface.
 
 ### 6.1 MCP Topology Diagram
 
-~~~mermaid
+```mermaid
 graph TD
     Operator[Operator Agent]
 
     subgraph "The Glass Pane - MCP Server"
         MCP[steward-mcp]
-        T1[Tool: ingest_reference]
+        T1[Tool: ingest_reference_url]
         T2[Tool: set_token_budget]
         T3[Tool: explain_decision]
         R1[mem://static/global]
@@ -186,11 +185,12 @@ graph TD
     T1 -->|Scrape| Qdrant[(Qdrant)]
     T3 -->|Query| Postgres[(Postgres)]
     R2 -.->|Tail| Logs[(Vector Agent)]
-~~~
----
+```
+
+-----
 
 ## 7. Closing Statement
 
-Memory Steward is not a "better RAG." It is a rejection of RAG's laziness. By enforcing strict contracts, async admission, and deterministic operational modes, we transform the LLM from a probabilistic toy into a reliable engineering component.
+Memory Steward is not a “better RAG.” It is a rejection of RAG’s laziness. By enforcing strict contracts, async admission, and deterministic operational modes, we transform the LLM from a probabilistic toy into a reliable engineering component.
 
-We don't just "remember" things. We **steward** them.
+We don’t just “remember” things. We **steward** them.
