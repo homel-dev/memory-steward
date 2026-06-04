@@ -357,6 +357,7 @@ def admit(req: AdmitTurnRequest):
                             "lexical": sparse,
                         },
                         "payload": {
+                            "memory_type": "dynamic_memory",
                             "project_id": req.project_id,
                             "content": content,
                             "high_confidence": high_conf,
