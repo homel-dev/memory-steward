@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: open-webui
-  namespace: homel
+  namespace: ms
 spec:
   replicas: 1
   selector:
@@ -28,8 +28,7 @@ spec:
             - name: ENABLE_OLLAMA_API
               value: "false"
 
-            # --- STT: point at LIST service ---
-            # LIST now also serves /v1/audio/transcriptions (see list_server.py fix)
+            # --- STT: LIST service ---
             - name: AUDIO_STT_ENGINE
               value: "openai"
             - name: AUDIO_STT_OPENAI_API_BASE_URL
@@ -39,22 +38,7 @@ spec:
             - name: AUDIO_STT_MODEL
               value: "whisper-1"
 
-            # --- Auth & security ---
-            # WEBUI_SECRET_KEY must be stable across restarts (used to encrypt stored credentials)
-            - name: WEBUI_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: openai-api-token
-                  key: API_TOKEN
-            - name: WEBUI_AUTH
-              value: "false"
-
-            - name: DISABLE_TELEMETRY
-              value: "true"
-
-            # --- Disable background LLM requests to memory-router ---
-            # These all fire extra /v1/chat/completions calls that bypass /glap
-            # and hit the builder LLM unnecessarily.
+            # --- Disable background LLM requests ---
             - name: ENABLE_AUTOCOMPLETE_GENERATION
               value: "false"
             - name: ENABLE_FOLLOW_UP_GENERATION
@@ -66,22 +50,30 @@ spec:
             - name: ENABLE_SEARCH_QUERY_GENERATION
               value: "false"
 
-            # --- Chat UI defaults ---
+            # --- Auth & misc ---
+            - name: WEBUI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openai-api-token
+                  key: API_TOKEN
+            - name: WEBUI_AUTH
+              value: "false"
+            - name: DISABLE_TELEMETRY
+              value: "true"
             - name: DEFAULT_USER_ROLE
               value: "user"
-            - name: SHOW_ADMIN_DETAILS
-              value: "false"
             - name: ENABLE_COMMUNITY_SHARING
               value: "false"
             - name: ENABLE_MESSAGE_RATING
               value: "false"
 
-            # NOTE: MCP tool server (memory-steward-mcp) cannot be pre-configured
-            # via environment variables — Open WebUI has no env var for this.
-            # One-time setup after first deploy:
-            #   Admin Settings -> External Tools -> + -> Type: MCP (Streamable HTTP)
-            #   URL: http://memory-steward-mcp.homel.svc.cluster.local:8081/mcp
-            #   Auth: None
+            # --- Open WebUI API key for /glap slash-command seeding ---
+            - name: OPEN_WEBUI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: open-webui-api-key
+                  key: OPEN_WEBUI_API_KEY
+                  optional: true
           ports:
             - containerPort: 8080
           volumeMounts:
@@ -102,7 +94,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: open-webui-data
-  namespace: homel
+  namespace: ms
 spec:
   accessModes:
     - ReadWriteOnce
@@ -114,7 +106,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: open-webui
-  namespace: homel
+  namespace: ms
 spec:
   selector:
     app: open-webui
