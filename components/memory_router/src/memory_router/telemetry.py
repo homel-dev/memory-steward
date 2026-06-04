@@ -1,3 +1,4 @@
+# components/memory_router/src/memory_router/telemetry.py
 # memory_router/telemetry.py
 import logging
 from contextlib import contextmanager
@@ -41,7 +42,9 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _trunc(s: Optional[str], max_len: int = _DEFAULT_ERROR_DETAIL_MAXLEN) -> Optional[str]:
+def _trunc(
+    s: Optional[str], max_len: int = _DEFAULT_ERROR_DETAIL_MAXLEN
+) -> Optional[str]:
     if s is None:
         return None
     if len(s) <= max_len:
@@ -61,7 +64,12 @@ class StepHandle:
 class TelemetryWriter:
     """Postgres-backed telemetry writer (best-effort; must never break request flow)."""
 
-    def __init__(self, dsn: str, *, connect_timeout_seconds: int = _DEFAULT_CONNECT_TIMEOUT_SECONDS):
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        connect_timeout_seconds: int = _DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    ):
         self._dsn = dsn
         self._connect_timeout_seconds = connect_timeout_seconds
 
@@ -261,7 +269,9 @@ class TelemetryWriter:
                         ok,
                         http_status,
                         _trunc(error_detail),
-                        psycopg.types.json.Json(extra_json) if extra_json is not None else None,
+                        psycopg.types.json.Json(extra_json)
+                        if extra_json is not None
+                        else None,
                         handle.step_id,
                     ),
                 )
@@ -277,7 +287,12 @@ class TelemetryWriter:
         name: str,
         extra_json: Optional[Dict[str, Any]] = None,
     ):
-        h = self.step_begin(request_id=request_id, project_id=project_id, name=name, extra_json=extra_json)
+        h = self.step_begin(
+            request_id=request_id,
+            project_id=project_id,
+            name=name,
+            extra_json=extra_json,
+        )
         try:
             yield h
             self.step_end(handle=h, ok=True)
@@ -338,4 +353,3 @@ class TelemetryWriter:
                 )
         except Exception as e:
             log.warning("telemetry.retrieval_write failed: %s", e)
-
