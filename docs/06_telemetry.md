@@ -1,12 +1,15 @@
-
 # TELEMETRY & OBSERVABILITY
+
 ## The Diagnostics Plane: Metrics, Accounting, and Introspection
+
 ### Foundational Engineering Specification (Document 06 of 12)
+
 *Namespace: memory-steward • Owner: architecture-team*
 
----
+-----
 
 ## Navigation
+
 **← [Prev: Document 05 (Stability)](05_stability.md) | [Next: Document 07 (Management)](07_glass_pane.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
@@ -25,39 +28,42 @@
 - [12. SQL Reference (Agent Logs)](#12-sql-reference-agent-logs)
 - [13. Closing Statement](#13-closing-statement)
 
----
+-----
 
 ## 0. Status, Scope, and Authority
 
 **Status:** FOUNDATIONAL
 **Audience:** Core maintainers, operators
 **Change policy:**
+
 - Append-only
 - No silent edits
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 0.1 Change Set Since Prior Draft
 
 This revision makes the previous draft **implementation-grade** by aligning with the **current** Postgres schema (`010_telemetry_schema.sql`) and the current writer (`telemetry.py`).
 
 ### Changes applied
+
 1. **Naming fix:** removed “Homel.dev” branding from the document header. System is **Memory Steward**.
-2. **Storage contract aligned:** schema, keys, indexes, retention, cardinality, and compatibility rules match `010_telemetry_schema.sql`.
-3. **Mode lineage clarified:** the Router **records** `decided_mode` if provided by upstream policy/decision logic; it is not the “mode authority” by default.
-4. **Explainability made real:** deterministic drop counters exist in `telemetry.retrieval` (`dropped_budget`, `dropped_no_content`, `dropped_other`) enabling `telemetry.explain_rejection(request_id)`.
-5. **Agent Skill made concrete:** defined deterministic read operations and exact SQL queries (bounded, safe) updated to the new column names.
+1. **Storage contract aligned:** schema, keys, indexes, retention, cardinality, and compatibility rules match `010_telemetry_schema.sql`.
+1. **Mode lineage clarified:** the Router **records** `decided_mode` if provided by upstream policy/decision logic; it is not the “mode authority” by default.
+1. **Explainability made real:** deterministic drop counters exist in `telemetry.retrieval` (`dropped_budget`, `dropped_no_content`, `dropped_other`) enabling `telemetry.explain_rejection(request_id)`.
+1. **Agent Skill made concrete:** defined deterministic read operations and exact SQL queries (bounded, safe) updated to the new column names.
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 1. Purpose
 
 This document defines the Telemetry Subsystem as a formal **Diagnostics Plane** alongside the **Content Plane**.
 It specifies:
+
 - What telemetry must be captured (high-signal, low-ambiguity)
 - How telemetry is stored (tables, keys, indexes, retention)
 - How telemetry is exposed to operators (pull-only Agent Skill)
@@ -67,7 +73,7 @@ This turns telemetry from “logs” into **measurable, regressible, and actiona
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 2. Architectural Concept: The Diagnostics Plane
 
@@ -77,7 +83,7 @@ The system operates on two distinct planes:
 
 1. **Content Plane:** `static_memory`, `dynamic_memory`, `reference_memory`
    Used to shape generation (prompt injection and retrieval).
-2. **Diagnostics Plane:** telemetry tables (time series, step traces, error digests, accounting)
+1. **Diagnostics Plane:** telemetry tables (time series, step traces, error digests, accounting)
    Used for introspection, debugging, and regression detection.
 
 > **Hard Invariant:** Telemetry from the Diagnostics Plane is **never injected** into chat context automatically. Telemetry is **pull-only** (operator/tool initiated) to prevent context pollution.
@@ -86,6 +92,7 @@ The system operates on two distinct planes:
 
 Telemetry is treated as “Observability Memory”: a durable record of **how** the system behaved, not **what** it discussed.
 Telemetry must answer engineering questions deterministically:
+
 - “What got slower?”
 - “Which dependency failed?”
 - “Why didn’t retrieval return anything?”
@@ -94,7 +101,7 @@ Telemetry must answer engineering questions deterministically:
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 3. Telemetry Storage Contract
 
@@ -103,7 +110,8 @@ Telemetry must answer engineering questions deterministically:
 The canonical schema is currently defined by `010_telemetry_schema.sql` and implemented by `telemetry.py`.
 
 #### Current DDL (canonical)
-~~~sql
+
+```sql
 CREATE SCHEMA IF NOT EXISTS telemetry;
 
 -- -------------------------------------------------------------------
@@ -254,11 +262,12 @@ SELECT
 FROM telemetry.request
 WHERE t_begin >= now() - interval '15 minutes'
 GROUP BY 1, 2;
-~~~
+```
 
 ### 3.2 Keys, Indexes, and Query Shape
 
 #### Primary identities
+
 - `request_id` is the join key across:
   - `telemetry.request` (one row per request)
   - `telemetry.step` (N rows per request)
@@ -267,12 +276,15 @@ GROUP BY 1, 2;
 - `project_id` is present on all tables to support project-scoped time-window queries.
 
 #### Foreign key (ordering) invariant
+
 Because `telemetry.step`, `telemetry.retrieval`, and `telemetry.admission` reference `telemetry.request(request_id)` with `ON DELETE CASCADE`:
+
 - The writer MUST create the `telemetry.request` row first for a `request_id`.
 - Only then may it insert step/retrieval/admission rows referencing the same `request_id`.
 - Deleting a `telemetry.request` row will cascade-delete step/retrieval/admission rows.
 
 #### Index intent (current)
+
 - `request_project_id_t_begin_idx`: project-level time window queries (dashboards and summaries)
 - `request_error_kind_t_begin_idx`: triage and error rates over time
 - `request_origin_hash_t_begin_idx`: bounded correlation by origin (hashed)
@@ -282,7 +294,9 @@ Because `telemetry.step`, `telemetry.retrieval`, and `telemetry.admission` refer
 - `retrieval_project_id_idx`: per-project retrieval health
 
 #### Query shape constraints
+
 All operator queries MUST be bounded by at least one of:
+
 - Time window (e.g. last 15m / 1h / 24h)
 - `project_id`
 - Specific `request_id`
@@ -294,6 +308,7 @@ Unbounded full-table scans are non-compliant.
 Telemetry is explicitly **bounded** and must not grow without limit.
 
 #### Required policy (MVP)
+
 - Retain raw telemetry for a fixed window (example defaults; make these config-driven):
   - `telemetry.step`: 7 days
   - `telemetry.request`: 7 days
@@ -301,14 +316,17 @@ Telemetry is explicitly **bounded** and must not grow without limit.
   - `telemetry.admission`: 30 days (useful for “admission health”)
 
 #### Enforcement mechanism (MVP)
+
 One of:
+
 - A Kubernetes CronJob that runs bounded `DELETE` statements
 - A Postgres-native scheduled job if available in your environment (deployment-specific)
 
 > **Hard Invariant:** Retention must be enforced by automation, not “manual cleanup.”
 
 #### Example retention deletes (canonical column names)
-~~~sql
+
+```sql
 -- NOTE: deleting from telemetry.request cascades to step/retrieval/admission
 -- due to ON DELETE CASCADE foreign keys.
 
@@ -320,29 +338,33 @@ WHERE t_begin < now() - interval '7 days';
 -- If you want admission retention independently, do NOT FK admission->request or do not delete requests earlier.
 DELETE FROM telemetry.admission
 WHERE t_begin < now() - interval '30 days';
-~~~
+```
 
 ### 3.4 Cardinality Rules
 
 To keep telemetry usable and cheap:
 
 Allowed high-cardinality identifiers:
+
 - `request_id` (only for point lookups)
 - `step.id` (internal)
 
 Allowed bounded labels:
+
 - `project_id` (bounded by operator usage; must not contain raw user text)
 - `step.name` (bounded to a small canonical set)
 - `error_kind` (bounded enum-like set)
 - `decided_mode` (bounded enum-like set)
 
 Potentially dangerous labels (must be bounded or hashed):
+
 - `origin`: may be stored, but must be bounded and must not contain sensitive content
 - `origin_hash`: preferred for correlation; must be stable and non-reversible (e.g. SHA-256 of origin + salt)
 - `error_detail`: MUST be truncated and must not include sensitive content
 - `extra_json`: MUST be bounded, structured, and non-sensitive
 
 **Never store**:
+
 - Raw chat text
 - Raw retrieved memory content
 - Secrets (API keys, passwords)
@@ -351,6 +373,7 @@ Potentially dangerous labels (must be bounded or hashed):
 ### 3.5 Compatibility Guarantees
 
 The writer contract requires:
+
 - Exactly one `telemetry.request` row per `request_id`
 - `request_end()` must execute in a `finally:` path (best-effort)
 - Steps must be recorded even if they fail, with `ok=false` and truncated `error_detail`
@@ -360,7 +383,7 @@ The writer contract requires:
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 4. Metric Taxonomy
 
@@ -369,6 +392,7 @@ This section defines which metrics must exist **now** (aligned with the current 
 ### 4.1 Router Metrics (Per Request)
 
 **Required (`telemetry.request`)**
+
 - Identity:
   - `request_id`
   - `project_id`
@@ -391,6 +415,7 @@ This section defines which metrics must exist **now** (aligned with the current 
 ### 4.2 Router Step Metrics (Per Step)
 
 **Required (`telemetry.step`)**
+
 - `name` (canonical step name)
 - `t_begin`, `t_end`
 - `duration_ms` (preferred; must be filled by writer, or derived at query time if absent)
@@ -400,6 +425,7 @@ This section defines which metrics must exist **now** (aligned with the current 
 - `extra_json` (bounded, structured, non-sensitive)
 
 **Canonical step set (writer must use these names)**
+
 - `embed`
 - `qdrant_search`
 - `pg_static`
@@ -409,6 +435,7 @@ This section defines which metrics must exist **now** (aligned with the current 
 ### 4.3 Steward Metrics (Per Admission)
 
 **Required (`telemetry.admission`)**
+
 - Identity:
   - `request_id`, `project_id`
 - Timing:
@@ -424,11 +451,12 @@ This section defines which metrics must exist **now** (aligned with the current 
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 5. Drop Reasons and “Explain Rejection”
 
 The goal is deterministic, debuggable answers to:
+
 - “Why was nothing injected?”
 - “Why were candidates dropped?”
 
@@ -437,6 +465,7 @@ The goal is deterministic, debuggable answers to:
 This enum is a Diagnostics Plane concept used to ensure deterministic accounting. It is not “prompt memory”.
 
 **DropReason (bounded set, mapped onto counters)**
+
 - `budget_exceeded` → `telemetry.retrieval.dropped_budget`
 - `no_content`      → `telemetry.retrieval.dropped_no_content`
 - `other`           → `telemetry.retrieval.dropped_other` *(writer must include details in `telemetry.step.extra_json` when `other` is incremented)*
@@ -446,6 +475,7 @@ This enum is a Diagnostics Plane concept used to ensure deterministic accounting
 Drop accounting MUST be recorded in `telemetry.retrieval` for each request that performs retrieval.
 
 **Required counters (`telemetry.retrieval`)**
+
 - `dense_candidates`
 - `selected_topk`
 - `context_tokens_est`
@@ -460,7 +490,8 @@ These counters are deterministic, cheap, and query-safe (no JSON extraction requ
 `telemetry.explain_rejection(request_id)` MUST be derivable from stored data.
 
 #### Output format (canonical)
-~~~text
+
+```text
 Request: <request_id>
 Project: <project_id>
 Mode: <decided_mode>
@@ -487,15 +518,16 @@ Steps:
 Admission:
   - ok=<...> extracted=<...> inserted=<...> qdrant_upserts=<...>
   - admission_lag_ms=<...>
-~~~
+```
 
 If a retrieval or admission row does not exist for the request, the blame output MUST explicitly say:
+
 - “Retrieval telemetry missing (not executed or not recorded).”
 - “Admission telemetry missing (not executed or not recorded).”
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 6. Deterministic System Suggestions
 
@@ -504,13 +536,16 @@ Suggestions must be threshold-driven and objective. No subjective coaching.
 ### 6.1 Budget Pressure
 
 **Trigger (supported by current schema)**
+
 - `telemetry.retrieval.dropped_budget > 0` over a window, OR
 - `static_tokens_est` repeatedly exceeds a configured fraction of `context_budget_max` (example 0.5)
 
 **Signal**
+
 - “Budget pressure: candidates dropped due to budget.”
 
 **Actionable**
+
 - Reduce `TOP_K` or per-item max token cap
 - Increase context window (if available)
 - Refactor static memory to reduce its token share (if static injection exists)
@@ -518,12 +553,15 @@ Suggestions must be threshold-driven and objective. No subjective coaching.
 ### 6.2 Retrieval Health
 
 **Trigger (supported by current schema)**
+
 - `dense_candidates = 0 AND selected_topk = 0` over a window
 
 **Signal**
+
 - “Retrieval blind spot: no candidates returned.”
 
 **Actionable**
+
 - Verify `project_id` filtering
 - Verify embeddings service health
 - Verify Qdrant collection exists and is populated
@@ -532,20 +570,23 @@ Suggestions must be threshold-driven and objective. No subjective coaching.
 ### 6.3 Latency Hotspots
 
 **Trigger (supported by current schema)**
+
 - Step p95 by `telemetry.step.name` exceeds a configured threshold over a window
   Example: `builder_chat` p95 > 2000ms over last 1h
 
 **Signal**
+
 - “Latency hotspot detected in step: builder_chat”
 
 **Actionable**
+
 - Switch model backend
 - Reduce request size / max generation
 - Investigate upstream saturation
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 7. Agent Skill Exposure (Pull Model)
 
@@ -566,7 +607,8 @@ The telemetry skill MUST be read-only and support bounded queries:
 The following SQL is canonical for the skill (MVP). All queries MUST be bounded.
 
 #### telemetry.summary(window_seconds, project_id)
-~~~sql
+
+```sql
 SELECT
   count(*) AS requests,
   count(*) FILTER (WHERE http_status >= 500 OR error_kind IS NOT NULL) AS errors,
@@ -577,10 +619,11 @@ FROM telemetry.request
 WHERE project_id = %s
   AND t_begin >= now() - (%s::int || ' seconds')::interval
   AND t_end IS NOT NULL;
-~~~
+```
 
 #### telemetry.slowest_steps(window_seconds, project_id)
-~~~sql
+
+```sql
 SELECT
   s.name AS step_name,
   count(*) AS n,
@@ -592,10 +635,11 @@ WHERE s.project_id = %s
 GROUP BY s.name
 ORDER BY p95_ms DESC
 LIMIT 20;
-~~~
+```
 
 #### telemetry.errors(window_seconds, top_n, project_id_optional)
-~~~sql
+
+```sql
 SELECT
   coalesce(error_kind, 'unknown') AS kind,
   count(*) AS n,
@@ -607,10 +651,11 @@ WHERE t_begin >= now() - (%s::int || ' seconds')::interval
 GROUP BY 1
 ORDER BY n DESC
 LIMIT %s;
-~~~
+```
 
 #### telemetry.budget_health(window_seconds, project_id)
-~~~sql
+
+```sql
 SELECT
   count(*) AS requests,
   percentile_cont(0.95) WITHIN GROUP (ORDER BY total_tokens) AS p95_total_tokens,
@@ -626,10 +671,11 @@ SELECT
 FROM telemetry.request
 WHERE project_id = %s
   AND t_begin >= now() - (%s::int || ' seconds')::interval;
-~~~
+```
 
 #### telemetry.explain_rejection(request_id)
-~~~sql
+
+```sql
 -- request
 SELECT * FROM telemetry.request WHERE request_id = %s;
 
@@ -645,7 +691,7 @@ ORDER BY t_begin ASC;
 
 -- admission (if present)
 SELECT * FROM telemetry.admission WHERE request_id = %s;
-~~~
+```
 
 ### 7.3 Safety Rules
 
@@ -657,13 +703,14 @@ SELECT * FROM telemetry.admission WHERE request_id = %s;
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 8. Implementation Wiring
 
 ### 8.1 Writer Contract (Router)
 
 Router MUST call:
+
 - `telemetry.request_begin(...)` at the start of handling `/v1/chat/completions`
 - `telemetry.request_end(...)` in a `finally:` block
 - `telemetry.step(...)` context manager for:
@@ -675,22 +722,26 @@ Router MUST call:
 
 **FK ordering invariant (mandatory)**
 Because `telemetry.step` and `telemetry.retrieval` reference `telemetry.request` by `request_id`:
+
 - The Router MUST insert `telemetry.request` first, before steps/retrieval rows.
 
 ### 8.2 Writer Contract (Steward)
 
 Steward MUST write admission results once per `request_id`:
+
 - `telemetry.admission_write(request_id, project_id, fragments_extracted, fragments_inserted, qdrant_upserts, admission_lag_ms, ok, error_detail)`
 
 Admission telemetry MUST be written in a `finally:` path so it exists even on failure.
 
 **FK ordering invariant (mandatory)**
 Because `telemetry.admission` references `telemetry.request` by `request_id`:
+
 - The originating `telemetry.request` row MUST exist before inserting admission telemetry.
 
 ### 8.3 Step Naming Canon
 
 To keep dashboards stable, step names are a strict canon:
+
 - `embed`
 - `qdrant_search`
 - `pg_static`
@@ -698,13 +749,14 @@ To keep dashboards stable, step names are a strict canon:
 - `steward_async_call`
 
 Adding new step names is allowed only if they are:
+
 - Bounded
 - Documented here
 - Adopted by dashboards explicitly
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 9. Relationship to Other Documents
 
@@ -714,11 +766,12 @@ Adding new step names is allowed only if they are:
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 10. Summary
 
 Telemetry in Memory Steward is a Diagnostics Plane subsystem with hard invariants:
+
 - Write-only by default
 - Pull-only exposure via Agent Skill
 - Deterministic, bounded metrics and queries
@@ -729,7 +782,7 @@ This makes the system debuggable, regressible, and operationally safe without po
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 11. Log Aggregation & Retention (Diagnostics Plane)
 
@@ -737,13 +790,16 @@ The Diagnostics Plane includes a first-class log aggregation and retention layer
 Logs are harvested from Kubernetes container streams and persisted locally with bounded growth and deterministic rotation.
 
 ### 11.1 Component Overview
+
 - **Agent:** Vector (DaemonSet), harvesting `/var/log/containers/*.log` and container streams.
 - **Sink:** Local file storage inside the cluster, persisted via PVC.
 - **Format:** Line-oriented UTF-8 text (default) with optional JSON payloads preserved; timestamps normalized to RFC 3339.
 - **Ownership:** Logs are an **operator-visible** diagnostic artifact; they do not participate in user content memory.
 
 ### 11.2 File Layout & Naming
+
 All logs are written under a single root directory:
+
 - Root: `/var/log/memory_steward_logs/`
 - Per-service files (examples):
   - `memory-router.log`
@@ -754,11 +810,12 @@ All logs are written under a single root directory:
   - `postgres.log`
   - `vllm-builder.log`
   - `vllm-steward.log`
-  - `anythingllm.log`
+  - `open-webui.log`
 
 **Stream tagging:** If stdout/stderr differentiation is needed, suffix with `.stdout.log` / `.stderr.log`.
 
 ### 11.3 Rotation & Retention Policy
+
 - **Rotation trigger:** Max file size (`LOG_ROTATE_MAX_SIZE_MB`, default **10**).
 - **History:** Max rotated files per log (`LOG_ROTATE_MAX_FILES`, default **10**).
 - **Time cap:** Hard retention horizon (`LOG_RETENTION_DAYS`, default **14**); Vector purges files older than this horizon daily.
@@ -767,24 +824,28 @@ All logs are written under a single root directory:
 Policies are **manifest-driven** and immutable at runtime (configured via ConfigMap).
 
 ### 11.4 Log Telemetry (Metrics)
+
 The agent exports self-metrics into the Telemetry DB under `telemetry.agent_logs` with the following counters/gauges:
 
-| Metric | Type | Labels | Description |
-| :--- | :--- | :--- | :--- |
-| `log_bytes_written_total` | counter | `service` | Cumulative bytes written per service file. |
-| `log_rotations_total` | counter | `service` | Number of rotations performed. |
-| `log_files_current` | gauge | `service` | Current number of files (active + rotated). |
-| `log_retained_days` | gauge | – | Effective configured retention horizon. |
-| `log_purge_events_total` | counter | `reason` | Purges due to `age`, `size`, or `global_cap`. |
-| `log_write_errors_total` | counter | `service` | Failed writes or permission errors. |
-| `agent_uptime_seconds` | gauge | – | Agent process uptime for health baselining. |
+|Metric                   |Type   |Labels   |Description                                  |
+|:------------------------|:------|:--------|:--------------------------------------------|
+|`log_bytes_written_total`|counter|`service`|Cumulative bytes written per service file.   |
+|`log_rotations_total`    |counter|`service`|Number of rotations performed.               |
+|`log_files_current`      |gauge  |`service`|Current number of files (active + rotated).  |
+|`log_retained_days`      |gauge  |–        |Effective configured retention horizon.      |
+|`log_purge_events_total` |counter|`reason` |Purges due to `age`, `size`, or `global_cap`.|
+|`log_write_errors_total` |counter|`service`|Failed writes or permission errors.          |
+|`agent_uptime_seconds`   |gauge  |–        |Agent process uptime for health baselining.  |
 
 ### 11.5 MCP Diagnostics Binding (Read-Only)
+
 The Diagnostics Plane exposes **bounded** slices of logs to MCP:
+
 - **Selectors:** `service`, `since` / `until`, `lines` (hard cap), optional `grep` (substring or RE2-style pattern).
 - **Guards:** Responses are never unbounded; binary content is dropped; secrets redaction is allowed at the agent level.
 
 ### 11.6 Compliance & Tests
+
 - No unbounded log growth under nominal throughput.
 - Rotation occurs before exceeding `LOG_ROTATE_MAX_SIZE_MB`.
 - Purge removes files older than `LOG_RETENTION_DAYS`.
@@ -792,12 +853,13 @@ The Diagnostics Plane exposes **bounded** slices of logs to MCP:
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 12. SQL Reference (Agent Logs)
 
 ### Agent Logs Schema (Support for Section 11.4)
-~~~sql
+
+```sql
 CREATE TABLE IF NOT EXISTS telemetry.agent_logs (
     id                  BIGSERIAL PRIMARY KEY,
     timestamp           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -813,15 +875,16 @@ CREATE TABLE IF NOT EXISTS telemetry.agent_logs (
 
 CREATE INDEX IF NOT EXISTS idx_agent_logs_service_time
     ON telemetry.agent_logs (service, timestamp DESC);
-~~~
+```
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 13. Closing Statement
+
 This document establishes the strict diagnostics, telemetry constraints, and operational standards required to maintain transparency and enforce system determinism within the Memory Steward architecture.
 
----
+-----
 
 **END OF DOCUMENT 06**
