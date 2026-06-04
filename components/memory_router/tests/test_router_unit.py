@@ -11,14 +11,15 @@ Covers:
 - Open WebUI background request detection
 - /glap intercept detection
 """
-import json
 import sys
 import types
 import pytest
 from unittest.mock import MagicMock, patch
 
+
 # ---------------------------------------------------------------------------
-# Stub heavy imports before loading the module
+# Stub only what is NOT installed in this venv.
+# numpy and sklearn are real deps — do NOT stub them.
 # ---------------------------------------------------------------------------
 
 def _stub_module(name, **attrs):
@@ -28,15 +29,12 @@ def _stub_module(name, **attrs):
     sys.modules[name] = mod
     return mod
 
+
 _stub_module("psycopg", connect=MagicMock())
 _stub_module("tiktoken",
     encoding_for_model=MagicMock(return_value=MagicMock(encode=lambda t: t.split())),
     get_encoding=MagicMock(return_value=MagicMock(encode=lambda t: t.split())),
 )
-_stub_module("numpy", array=MagicMock(), inf=float("inf"))
-_stub_module("sklearn")
-_stub_module("sklearn.metrics")
-_stub_module("sklearn.metrics.pairwise", cosine_similarity=MagicMock())
 _stub_module("memory_router.telemetry", TelemetryWriter=MagicMock())
 _stub_module("memory_router.mcp_bridge", handle_glap=MagicMock())
 
@@ -127,7 +125,7 @@ class TestProjectId:
         req = self._make_request({"origin": "https://myapp.com"})
         pid = router._project_id(req)
         assert len(pid) == 16
-        assert pid == router._project_id(req)  # deterministic
+        assert pid == router._project_id(req)
 
     def test_different_origins_produce_different_ids(self):
         req1 = self._make_request({"origin": "https://app1.com"})
@@ -153,14 +151,8 @@ class TestProjectId:
 
 # ---------------------------------------------------------------------------
 # _maximal_marginal_relevance
+# numpy and sklearn are real — no patching needed
 # ---------------------------------------------------------------------------
-
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity as real_cosine_sim
-
-# Unmonkey-patch numpy and sklearn for MMR tests
-import numpy as real_np
-router_np = real_np
 
 class TestMMR:
 
@@ -168,40 +160,35 @@ class TestMMR:
         return Candidate(id=cid, content=f"content_{cid}", vector=vec, metadata={})
 
     def test_empty_candidates_returns_empty(self):
-        with patch("memory_router.server.np", real_np), \
-             patch("memory_router.server.cosine_similarity", real_cosine_sim):
-            result = router._maximal_marginal_relevance(
-                query_vec=[1.0, 0.0],
-                candidates=[],
-                top_k=3,
-                lambda_mult=0.5,
-            )
+        result = router._maximal_marginal_relevance(
+            query_vec=[1.0, 0.0],
+            candidates=[],
+            top_k=3,
+            lambda_mult=0.5,
+        )
         assert result == []
 
     def test_returns_at_most_top_k(self):
         candidates = [
-            self._make_candidate(f"c{i}", [float(i), 0.0]) for i in range(10)
+            self._make_candidate(f"c{i}", [float(i % 2), float((i + 1) % 2)])
+            for i in range(10)
         ]
-        with patch("memory_router.server.np", real_np), \
-             patch("memory_router.server.cosine_similarity", real_cosine_sim):
-            result = router._maximal_marginal_relevance(
-                query_vec=[1.0, 0.0],
-                candidates=candidates,
-                top_k=3,
-                lambda_mult=0.5,
-            )
+        result = router._maximal_marginal_relevance(
+            query_vec=[1.0, 0.0],
+            candidates=candidates,
+            top_k=3,
+            lambda_mult=0.5,
+        )
         assert len(result) <= 3
 
     def test_single_candidate_always_selected(self):
         c = self._make_candidate("only", [1.0, 0.0])
-        with patch("memory_router.server.np", real_np), \
-             patch("memory_router.server.cosine_similarity", real_cosine_sim):
-            result = router._maximal_marginal_relevance(
-                query_vec=[1.0, 0.0],
-                candidates=[c],
-                top_k=5,
-                lambda_mult=0.5,
-            )
+        result = router._maximal_marginal_relevance(
+            query_vec=[1.0, 0.0],
+            candidates=[c],
+            top_k=5,
+            lambda_mult=0.5,
+        )
         assert len(result) == 1
         assert result[0].id == "only"
 
@@ -210,14 +197,12 @@ class TestMMR:
         # query is [1,0], c_a is [1,0] (most similar), c_b is [0,1]
         c_a = self._make_candidate("a", [1.0, 0.0])
         c_b = self._make_candidate("b", [0.0, 1.0])
-        with patch("memory_router.server.np", real_np), \
-             patch("memory_router.server.cosine_similarity", real_cosine_sim):
-            result = router._maximal_marginal_relevance(
-                query_vec=[1.0, 0.0],
-                candidates=[c_b, c_a],
-                top_k=1,
-                lambda_mult=1.0,
-            )
+        result = router._maximal_marginal_relevance(
+            query_vec=[1.0, 0.0],
+            candidates=[c_b, c_a],
+            top_k=1,
+            lambda_mult=1.0,
+        )
         assert result[0].id == "a"
 
 
@@ -246,7 +231,6 @@ class TestStitchContext:
         assert dropped_no_content == 0
 
     def test_budget_enforcement(self):
-        # Each candidate costs 10 tokens + 5 overhead = 15. Budget = 20 → only 1 fits.
         candidates = [
             self._make_candidate("c1", "fact one", tokens=10),
             self._make_candidate("c2", "fact two", tokens=10),
@@ -294,16 +278,7 @@ class TestStitchContext:
 
 class TestOpenWebUIBackgroundGuard:
 
-    MARKERS = [
-        "create a concise, 3-5 word title",
-        "generate 1-3 broad tags",
-        "generate follow-up questions",
-        "autocomplete the following",
-        "generate a search query",
-    ]
-
     def _is_background(self, system_content: str) -> bool:
-        """Replicate the guard logic from server.py"""
         _OWUI_BACKGROUND_MARKERS = (
             "create a concise, 3-5 word title",
             "generate 1-3 broad tags",
@@ -345,21 +320,16 @@ class TestOpenWebUIBackgroundGuard:
 class TestGlapIntercept:
 
     def test_glap_prefix_detected(self):
-        text = "/glap get_system_health"
-        assert text.strip().lower().startswith("/glap")
+        assert "/glap get_system_health".strip().lower().startswith("/glap")
 
     def test_glap_uppercase_detected(self):
-        text = "/GLAP explain_last_decision"
-        assert text.strip().lower().startswith("/glap")
+        assert "/GLAP explain_last_decision".strip().lower().startswith("/glap")
 
     def test_glap_with_args(self):
-        text = "/glap simulate_retrieval project_id=test query=hello"
-        assert text.strip().lower().startswith("/glap")
+        assert "/glap simulate_retrieval project_id=test query=hello".strip().lower().startswith("/glap")
 
     def test_non_glap_not_detected(self):
-        text = "what is my project code?"
-        assert not text.strip().lower().startswith("/glap")
+        assert not "what is my project code?".strip().lower().startswith("/glap")
 
     def test_glap_bare(self):
-        text = "/glap"
-        assert text.strip().lower().startswith("/glap")
+        assert "/glap".strip().lower().startswith("/glap")
