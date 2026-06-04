@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 
 # ---------------------------------------------------------------------------
-# Stub all external deps before importing the router
+# Stub only non-installed deps before importing the router
 # ---------------------------------------------------------------------------
 
 def _stub(name, **attrs):
@@ -57,9 +57,10 @@ client = TestClient(router_server.app)
 # ---------------------------------------------------------------------------
 
 def _mock_pg_static(rows=None):
+    # Tuple format: (id, content, mode) — matches _pg_static_load return shape
     return patch(
         "memory_router.server._pg_static_load",
-        return_value=rows or [("global", "default", "Always respond in English")]
+        return_value=rows or [("rule-1", "Always respond in English", "global")]
     )
 
 def _mock_embed():
@@ -100,7 +101,7 @@ class TestModels:
 
 
 # ---------------------------------------------------------------------------
-# /glap intercept (Doc 08 — builder must never be called for /glap)
+# /glap intercept
 # ---------------------------------------------------------------------------
 
 class TestGlapIntercept:
@@ -170,7 +171,7 @@ class TestBackgroundRequestGuard:
 
 
 # ---------------------------------------------------------------------------
-# Doc 08 §3.3 — static rules always injected
+# Doc 08 §3.3 — static rules always injected into policy_layer.global
 # ---------------------------------------------------------------------------
 
 class TestStaticRulesAlwaysInjected:
@@ -190,7 +191,10 @@ class TestStaticRulesAlwaysInjected:
             }
             return mock_resp
 
-        with _mock_pg_static([("global", "default", "Always respond in English")]), \
+        # Tuple format: (id, content, mode)
+        static_rows = [("rule-1", "Always respond in English", "global")]
+
+        with patch("memory_router.server._pg_static_load", return_value=static_rows), \
              _mock_embed(), \
              _mock_qdrant(), \
              patch("memory_router.server.requests.post", side_effect=capture_post), \
@@ -200,19 +204,14 @@ class TestStaticRulesAlwaysInjected:
                 "stream": False,
             })
 
-        import json
         messages = captured.get("messages", [])
         system_content = " ".join(
             m.get("content", "") for m in messages if m.get("role") == "system"
         )
-        # Static rules are serialised into the canonical envelope JSON under
-        # policy_layer.global — parse and check there
-        try:
-            envelope = json.loads(system_content)
-            global_rules = envelope.get("policy_layer", {}).get("global", [])
-            assert any("Always respond in English" in r for r in global_rules), (
-                f"Static rule not found in policy_layer.global. Got: {global_rules}"
-            )
-        except json.JSONDecodeError:
-            # Fallback: plain string check
-            assert "Always respond in English" in system_content
+
+        # Static rule is serialised into policy_layer.global in the canonical envelope
+        envelope = json.loads(system_content)
+        global_rules = envelope.get("policy_layer", {}).get("global", [])
+        assert any("Always respond in English" in r for r in global_rules), (
+            f"Static rule not found in policy_layer.global. Got: {global_rules}"
+        )
