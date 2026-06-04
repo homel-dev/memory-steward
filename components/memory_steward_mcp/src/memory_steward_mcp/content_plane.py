@@ -1,3 +1,4 @@
+# components/memory_steward_mcp/src/memory_steward_mcp/content_plane.py
 # content_plane.py
 """
 Content Plane: reference memory ingestion (URL + text), static memory CRUD,
@@ -317,7 +318,7 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         """[Content Plane] Remove all reference memory chunks for a product/version.
         This is destructive and irreversible. Re-ingest to restore."""
         try:
-            result = qdrant.delete(
+            qdrant.delete(
                 collection_name=QDRANT_COLLECTION,
                 points_selector=Filter(must=[
                     FieldCondition(key="memory_type", match=MatchValue(value="reference_memory")),
