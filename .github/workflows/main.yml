@@ -41,7 +41,9 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ matrix.path }}
-        run: uv run pytest
+        run: |
+          # Exit code 5 means no tests collected — not a failure
+          uv run pytest || [ $? -eq 5 ]
 
   lint:
     name: Lint (${{ matrix.component }})
