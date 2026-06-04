@@ -1,7 +1,7 @@
 # memory_router/server.py
 """
-memory-router
-MMR + Semantic Stitching
+homel-memory-router
+High-Grade Engineering Edition: MMR + Semantic Stitching
 """
 
 import os
@@ -480,10 +480,8 @@ def _assemble_context(
     )
 
     # Extract Last N turns
-    # Use text_content for the dialogue summary so base64 blobs don't bloat
-    # the canonical envelope (which is a JSON string, not an upstream payload).
     dialogue_history = [
-        {"role": m.role, "content": m.text_content}
+        {"role": m.role, "content": m.content} 
         for m in recent_messages[-4:]
     ]
 
@@ -639,6 +637,37 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         return {"choices": [{"message": {"role": "assistant", "content": "Ready."}}]}
 
     # ------------------------------------------------------------------
+    # OPEN WEBUI BACKGROUND REQUEST GUARD
+    # Open WebUI fires silent background completions for title generation,
+    # autocomplete, follow-up suggestions, and tags. These are identified
+    # by their system prompt content. We short-circuit them here so they
+    # never reach the builder LLM or steward admission.
+    # Disable at source with env vars (see open-webui.yaml), but guard
+    # here as a belt-and-suspenders defence for any that slip through.
+    # ------------------------------------------------------------------
+    _OWUI_BACKGROUND_MARKERS = (
+        "create a concise, 3-5 word title",
+        "generate 1-3 broad tags",
+        "generate follow-up questions",
+        "autocomplete the following",
+        "generate a search query",
+    )
+    system_msgs = [m.text_content.lower() for m in req.messages if m.role == "system"]
+    if any(marker in s for s in system_msgs for marker in _OWUI_BACKGROUND_MARKERS):
+        log.info("router.background_request_dropped request_id=%s", request_id)
+        empty = {
+            "id": f"chatcmpl-drop-{request_id}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_requested or "memory-router",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+        if req.stream:
+            return StreamingResponse(_glap_stream_generator(""), media_type="text/event-stream")
+        return JSONResponse(status_code=200, content=empty)
+
+    # ------------------------------------------------------------------
     # GLAP INTERCEPT (Control Plane Path)
     # ------------------------------------------------------------------
     if user_text.strip().lower().startswith("/glap"):
@@ -728,11 +757,9 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             dropped_other=0,
         )
 
-        upstream_msgs: List[Dict[str, Any]] = []
+        upstream_msgs: List[Dict[str, str]] = []
         if system_ctx.strip():
             upstream_msgs.append({"role": "system", "content": system_ctx})
-        # model_dump() preserves content as str *or* list[dict] (multimodal),
-        # which is what the builder expects for image/file attachments.
         upstream_msgs.extend([m.model_dump() for m in req.messages])
 
         if DEBUG_PROMPTS:
@@ -813,17 +840,12 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             request_id,
         )
 
-        # Pass the full original messages so the steward sees text content.
-        # Use text_content extraction so base64 blobs are not stored in memory.
-        admit_messages = [
-            {"role": m.role, "content": m.text_content}
-            for m in req.messages
-            if m.role == "user" and m.text_content.strip()
-        ]
         _async_admit(
             request_id=request_id,
             project_id=pid,
-            messages=admit_messages,
+            messages=[
+                {"role": "user", "content": user_text},
+            ],
         )
 
         log.info(
