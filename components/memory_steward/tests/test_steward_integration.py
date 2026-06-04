@@ -9,6 +9,7 @@ Doc 08 invariants tested:
 import sys
 import types
 import pytest
+import importlib
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
@@ -24,7 +25,6 @@ def _stub(name, **attrs):
 _stub("psycopg", connect=MagicMock())
 _stub("memory_steward.telemetry", StewardTelemetryWriter=MagicMock())
 
-import importlib
 steward_server = importlib.import_module("memory_steward.server")
 client = TestClient(steward_server.app)
 
