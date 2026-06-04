@@ -1,3 +1,4 @@
+# k8s/runtime-contract.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,21 +12,13 @@ data:
   STEWARD_URL: "http://memory-steward:8090"
   MCP_URL: "http://memory-steward-mcp:8081/mcp"
   MAX_CONTEXT_TOKENS: "128000"
-
   QDRANT_COLLECTION: "homel_memory"
-
-  # Optional router knobs (safe defaults)
   RECENCY_HALF_LIFE_SECONDS: "604800"
   DENSE_PREFETCH: "25"
   TOP_K: "8"
-
-  # Steward knobs (defaults)
   MIN_CONFIDENCE: "0.7"
-
   STATIC_MEMORY_REFRESH_SECONDS: "1800"
   HYSTERESIS_WINDOW: "8"
-
-  # Open WebUI — slash-command seeding via mcp_bridge.py
   OPEN_WEBUI_URL: "http://open-webui:8080"
   # OPEN_WEBUI_API_KEY is sensitive — set via secret, not here.
   # kubectl create secret generic open-webui-api-key \
