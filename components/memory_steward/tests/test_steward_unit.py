@@ -14,6 +14,7 @@ import sys
 import types
 import uuid
 import pytest
+import importlib
 from unittest.mock import MagicMock, patch
 
 # Stub heavy imports
@@ -27,7 +28,6 @@ def _stub(name, **attrs):
 _stub("psycopg", connect=MagicMock())
 _stub("memory_steward.telemetry", StewardTelemetryWriter=MagicMock())
 
-import importlib
 steward = importlib.import_module("memory_steward.server")
 
 
