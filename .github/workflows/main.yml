@@ -1,86 +1,83 @@
-name: Build & Publish images to GHCR (amd64 & arm64)
+# .github/workflows/main.yml
+name: CI
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch: {}
   push:
     branches: ["main"]
-    tags: ["v*.*.*"]
-
-permissions:
-  contents: read
-  packages: write
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  build_and_push:
-    name: Build & push (${{ matrix.component }})
+  test:
+    name: Test (${{ matrix.component }})
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
         include:
-          - component: embeddings
-            context: ./components/embeddings
-            dockerfile: ./components/embeddings/Dockerfile
           - component: memory-router
-            context: ./components/memory_router
-            dockerfile: ./components/memory_router/Dockerfile
+            path: components/memory_router
           - component: memory-steward
-            context: ./components/memory_steward
-            dockerfile: ./components/memory_steward/Dockerfile
+            path: components/memory_steward
           - component: memory-steward-mcp
-            context: ./components/memory_steward_mcp
-            dockerfile: ./components/memory_steward_mcp/Dockerfile
-          - component: memory-steward-list
-            context: ./components/memory_steward_list
-            dockerfile: ./components/memory_steward_list/Dockerfile
+            path: components/memory_steward_mcp
 
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Set up QEMU (multi-arch)
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          version: v0.22.0
+          version: "latest"
 
-      - name: Login to GHCR
-        uses: docker/login-action@v3
+      - name: Install dependencies
+        working-directory: ${{ matrix.path }}
+        run: uv sync --extra dev
+
+      - name: Run tests
+        working-directory: ${{ matrix.path }}
+        run: uv run pytest
+
+  lint:
+    name: Lint (${{ matrix.component }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: memory-router
+            path: components/memory_router
+          - component: memory-steward
+            path: components/memory_steward
+          - component: memory-steward-mcp
+            path: components/memory_steward_mcp
+          - component: memory-steward-list
+            path: components/memory_steward_list
+          - component: embeddings
+            path: components/embeddings
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          version: "latest"
 
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository }}/${{ matrix.component }}
-          tags: |
-            type=sha
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+      - name: Install dependencies
+        working-directory: ${{ matrix.path }}
+        run: uv sync --extra dev
 
-      - name: Build & push
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.dockerfile }}
-          push: true
-          platforms: linux/amd64,linux/arm64
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+      - name: Ruff lint
+        working-directory: ${{ matrix.path }}
+        run: uv run ruff check src/
 
+      - name: Ruff format check
+        working-directory: ${{ matrix.path }}
+        run: uv run ruff format --check src/
