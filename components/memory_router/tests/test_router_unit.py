@@ -11,6 +11,7 @@ Covers:
 - Open WebUI background request detection
 - /glap intercept detection
 """
+import importlib
 import sys
 import types
 import pytest
@@ -38,7 +39,6 @@ _stub_module("tiktoken",
 _stub_module("memory_router.telemetry", TelemetryWriter=MagicMock())
 _stub_module("memory_router.mcp_bridge", handle_glap=MagicMock())
 
-import importlib
 router = importlib.import_module("memory_router.server")
 
 ChatMessage = router.ChatMessage
