@@ -1,4 +1,4 @@
-# components/memory_steward/tests/conftest.py
+# components/memory_router/tests/conftest.py
 """
 Shared fixtures and environment setup for all tests.
 All external dependencies (Postgres, Qdrant, embeddings, LLM) are mocked.
