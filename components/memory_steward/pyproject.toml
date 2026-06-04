@@ -26,7 +26,7 @@ dependencies = [
 dev = [
   "pytest>=8.0",
   "pytest-asyncio>=0.23",
-  "httpx>=0.27",
+  "httpx>=0.28",
   "ruff>=0.3",
   "mypy>=1.8",
 ]
@@ -41,6 +41,7 @@ where = ["src"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
