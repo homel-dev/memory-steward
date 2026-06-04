@@ -13,6 +13,7 @@ Key invariants (Doc 03):
 
 import re
 import time
+import uuid
 import hashlib
 import logging
 import requests
@@ -42,13 +43,23 @@ def _embed(texts: list[str]) -> list[list[float]]:
     return r.json()["vectors"]
 
 
-def _chunk_id(product: str, version: str, content: str) -> str:
-    """Deterministic, stable chunk ID. Same content always maps to the same ID.
-    This makes ingestion fully idempotent."""
+def _ref_key(product: str, version: str, content: str) -> str:
+    """Human-readable, stable reference key. Stored in the payload for debugging
+    and provenance; NOT used as the Qdrant point ID."""
     fingerprint = hashlib.sha256(
         f"{product}:{version}:{content}".encode()
     ).hexdigest()[:32]
     return f"ref:{product}:{version}:{fingerprint}"
+
+
+def _chunk_id(product: str, version: str, content: str) -> str:
+    """Deterministic, stable Qdrant point ID.
+
+    Qdrant only accepts unsigned-int or UUID point IDs; a string like
+    'ref:product:version:hash' is rejected at upsert. We derive a UUIDv5 from
+    the human-readable ref key so the ID is valid AND idempotent (same content
+    always maps to the same UUID)."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, _ref_key(product, version, content)))
 
 
 def _chunk_markdown(text: str, max_chars: int = 1500) -> list[dict]:
@@ -120,6 +131,75 @@ def _record_provenance(
 
 
 # ---------------------------------------------------------------------------
+# Shared ingestion (module scope so MCP tools AND the Git plane can import it)
+# ---------------------------------------------------------------------------
+
+def _ingest_text_internal(
+    qdrant: QdrantClient,
+    *,
+    text: str,
+    product: str,
+    version: str,
+    scope: str,
+    source_url: str,
+) -> str:
+    """Chunk, embed, and upsert text as reference memory. Idempotent.
+
+    Promoted to module scope (was previously nested inside
+    register_content_tools, which made `from content_plane import
+    _ingest_text_internal` fail and prevented the MCP server from starting).
+    The Qdrant client is now passed explicitly instead of captured via closure.
+    """
+    chunks = _chunk_markdown(text)
+    if not chunks:
+        return "No content extracted — check the source text."
+
+    texts = [c["content"] for c in chunks]
+    try:
+        vectors = _embed(texts)
+    except Exception as e:
+        return f"Embedding failed: {e}"
+
+    points = []
+    for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
+        cid = _chunk_id(product, version, chunk["content"])
+        points.append(PointStruct(
+            id=cid,
+            vector={"dense": vec},
+            payload={
+                "memory_type": "reference_memory",
+                "ref_key": _ref_key(product, version, chunk["content"]),
+                "product": product,
+                "version": version,
+                "scope": scope,
+                "doc_section": chunk["section"],
+                "content": chunk["content"],
+                "source": source_url,
+                "chunk_index": i,
+                "ingested_at": time.time(),
+            }
+        ))
+
+    try:
+        qdrant.upsert(collection_name=QDRANT_COLLECTION, points=points)
+    except Exception as e:
+        return f"Qdrant upsert failed after embedding {len(points)} chunks: {e}"
+
+    try:
+        _record_provenance(product, version, scope, source_url, len(chunks), len(points))
+    except Exception as e:
+        log.warning(f"Provenance record failed (non-fatal): {e}")
+
+    log.info(f"Operator action: INGEST_REFERENCE product={product} version={version} chunks={len(points)}")
+    return (
+        f"✅ Ingested **{len(points)} chunks** for `{product}@{version}` ({scope}).\n"
+        f"Source: {source_url}\n"
+        f"Sections: {', '.join(set(c['section'] for c in chunks[:8]))}"
+        + (" ..." if len(chunks) > 8 else "")
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 
@@ -151,6 +231,7 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
             return f"Failed to fetch {url}: {e}"
 
         return _ingest_text_internal(
+            qdrant,
             text=raw_text,
             product=product,
             version=version,
@@ -173,65 +254,12 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         Idempotent — re-ingesting the same content produces the same chunk IDs.
         """
         return _ingest_text_internal(
+            qdrant,
             text=content,
             product=product,
             version=version,
             scope=scope,
             source_url=source_url,
-        )
-
-    def _ingest_text_internal(
-        text: str,
-        product: str,
-        version: str,
-        scope: str,
-        source_url: str,
-    ) -> str:
-        chunks = _chunk_markdown(text)
-        if not chunks:
-            return "No content extracted — check the source text."
-
-        texts = [c["content"] for c in chunks]
-        try:
-            vectors = _embed(texts)
-        except Exception as e:
-            return f"Embedding failed: {e}"
-
-        points = []
-        for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
-            cid = _chunk_id(product, version, chunk["content"])
-            points.append(PointStruct(
-                id=cid,
-                vector={"dense": vec},
-                payload={
-                    "memory_type": "reference_memory",
-                    "product": product,
-                    "version": version,
-                    "scope": scope,
-                    "doc_section": chunk["section"],
-                    "content": chunk["content"],
-                    "source": source_url,
-                    "chunk_index": i,
-                    "ingested_at": time.time(),
-                }
-            ))
-
-        try:
-            qdrant.upsert(collection_name=QDRANT_COLLECTION, points=points)
-        except Exception as e:
-            return f"Qdrant upsert failed after embedding {len(points)} chunks: {e}"
-
-        try:
-            _record_provenance(product, version, scope, source_url, len(chunks), len(points))
-        except Exception as e:
-            log.warning(f"Provenance record failed (non-fatal): {e}")
-
-        log.info(f"Operator action: INGEST_REFERENCE product={product} version={version} chunks={len(points)}")
-        return (
-            f"✅ Ingested **{len(points)} chunks** for `{product}@{version}` ({scope}).\n"
-            f"Source: {source_url}\n"
-            f"Sections: {', '.join(set(c['section'] for c in chunks[:8]))}"
-            + (" ..." if len(chunks) > 8 else "")
         )
 
     # -----------------------------------------------------------------------
