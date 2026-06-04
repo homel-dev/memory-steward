@@ -1,3 +1,4 @@
+# components/memory_steward_mcp/src/memory_steward_mcp/diagnostics_plane.py
 # diagnostics_plane.py
 """
 Diagnostics Plane: health, explain, metrics, Qdrant visibility, memory audit.
@@ -176,7 +177,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
         else:
             lines.append("- Admission telemetry missing (not executed or not recorded).")
 
-        return "\n".join(l for l in lines if l is not None)
+        return "\n".join(line for line in lines if line is not None)
 
     @mcp.tool()
     def explain_last_decision() -> str:
@@ -340,7 +341,6 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
         except Exception as e:
             dynamic_count = reference_count = static_count = f"err({e})"
 
-        cfg = info.config.params if hasattr(info, "config") else {}
         status = info.status if hasattr(info, "status") else "unknown"
 
         lines = [
