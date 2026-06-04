@@ -1,3 +1,4 @@
+# components/memory_steward_mcp/src/memory_steward_mcp/config.py
 """
 Central config and canonical runtime contract.
 Aligned with Document 09 (Runtime) and Document 06 (Telemetry).
@@ -27,3 +28,7 @@ HYSTERESIS_WINDOW   = int(_env("HYSTERESIS_WINDOW", "8"))
 FORCE_MODE          = _env("FORCE_MODE", "")
 
 APP_VERSION         = "memory-steward-mcp/2.0.0"
+
+# GitLab integration
+GITLAB_URL          = _env("GITLAB_URL", "")   # e.g. https://gitlab.yourdomain.com
+GITLAB_TOKEN        = _env("GITLAB_TOKEN", "")  # Personal Access Token, api scope
