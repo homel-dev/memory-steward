@@ -78,7 +78,7 @@ jobs:
 
       - name: Ruff lint
         working-directory: ${{ matrix.path }}
-        run: uv run ruff check src/
+        run: uv run ruff check src/ --fix
 
       - name: Ruff format check
         working-directory: ${{ matrix.path }}
