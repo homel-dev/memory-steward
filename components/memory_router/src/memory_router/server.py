@@ -97,6 +97,64 @@ DEBUG_PROMPTS = _opt("DEBUG_PROMPTS", "0").strip() in (
     "YES",
 )
 
+# Env value is now only the *default*. The live value may be overridden by the
+# stability plane (MCP set_token_budget), which writes runtime_config in Postgres.
+MAX_CONTEXT_TOKENS_DEFAULT = MAX_CONTEXT_TOKENS
+
+# ------------------------------------------------------------------------------
+# Runtime config (live, operator-tunable via the MCP stability plane)
+# ------------------------------------------------------------------------------
+# The stability plane writes keys into the Postgres `runtime_config` table.
+# Previously the Router only read env vars at import, so those writes were inert
+# (Doc 07 §8 "Atomic Config: changes take effect for the next request" was not
+# honored). We resolve the value at request time with a short TTL cache to honor
+# the contract without a DB hit on every request.
+#
+# Scope note: only Router-owned knobs are resolved here. FORCE_MODE and
+# HYSTERESIS_WINDOW are NOT consumed by the Router on purpose — per Doc 02 the
+# Router never infers or owns operational mode; those belong to the Steward.
+
+_RUNTIME_CFG_TTL_SECONDS = float(_opt("RUNTIME_CONFIG_TTL_SECONDS", "5"))
+_runtime_cfg_cache: Dict[str, str] = {}
+_runtime_cfg_expiry: float = 0.0
+_runtime_cfg_lock = threading.Lock()
+
+
+def _runtime_config_snapshot() -> Dict[str, str]:
+    """Return runtime_config as a dict, cached for _RUNTIME_CFG_TTL_SECONDS.
+    Best-effort: on any DB error we fall back to the last cache (or empty)."""
+    global _runtime_cfg_cache, _runtime_cfg_expiry
+    now = time.monotonic()
+    with _runtime_cfg_lock:
+        if now < _runtime_cfg_expiry:
+            return _runtime_cfg_cache
+    try:
+        with _pg() as conn, conn.cursor() as cur:
+            cur.execute("SELECT key, value FROM runtime_config")
+            snapshot = {k: v for (k, v) in cur.fetchall()}
+    except Exception as e:  # table missing, DB down, etc. — never block the request
+        log.warning("runtime_config read failed (using defaults): %s", e)
+        snapshot = _runtime_cfg_cache
+    with _runtime_cfg_lock:
+        _runtime_cfg_cache = snapshot
+        _runtime_cfg_expiry = time.monotonic() + _RUNTIME_CFG_TTL_SECONDS
+    return snapshot
+
+
+def _runtime_int(key: str, default: int) -> int:
+    raw = _runtime_config_snapshot().get(key)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        log.warning("runtime_config[%s]=%r is not an int; using default %d", key, raw, default)
+        return default
+
+
+def _effective_max_context_tokens() -> int:
+    return _runtime_int("MAX_CONTEXT_TOKENS", MAX_CONTEXT_TOKENS_DEFAULT)
+
 # ------------------------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------------------------
@@ -389,6 +447,87 @@ def _qdrant_dense(project_id: str, vec: List[float], limit: int) -> List[Candida
         raise
 
 
+# Reference memory is gated by mode (Doc 02 §6.1 / Doc 03 §6.1): only retrieved
+# in rigor-oriented modes. Default-on because the safe-default mode is engineering.
+REFERENCE_RETRIEVAL_ENABLED = _opt("REFERENCE_RETRIEVAL_ENABLED", "1").strip() in (
+    "1", "true", "TRUE", "yes", "YES",
+)
+REFERENCE_MODES = {"engineering", "implementation", "formal_spec"}
+
+
+def _qdrant_reference(vec: List[float], limit: int, scope: Optional[str] = None) -> List[Candidate]:
+    """Retrieve reference memory.
+
+    Reference chunks carry no project_id (Doc 03: reference is namespaced by
+    product/version/scope, NOT by project), so the project-scoped dense path can
+    never surface them. This path filters on memory_type instead, making ingested
+    reference docs retrievable by the chat flow.
+
+    NOTE: product/version disambiguation (Doc 03 §6.1 gate 4) is not enforced here
+    because the Router currently has no product signal; ranking is left to vector
+    similarity + MMR. Passing product/version (via request or project profile) is
+    the correct follow-up to fully satisfy the gate.
+    """
+    must: List[Dict[str, Any]] = [
+        {"key": "memory_type", "match": {"value": "reference_memory"}}
+    ]
+    if scope:
+        must.append({"key": "scope", "match": {"value": scope}})
+
+    payload = {
+        "vector": {"name": "dense", "vector": vec},
+        "limit": limit,
+        "with_payload": True,
+        "with_vector": True,
+        "filter": {"must": must},
+    }
+    try:
+        r = requests.post(
+            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search",
+            json=payload,
+            timeout=30,
+        )
+        r.raise_for_status()
+        results = r.json().get("result", []) or []
+
+        candidates: List[Candidate] = []
+        for res in results:
+            md = res.get("payload") or {}
+            content = md.get("content")
+            if not content:
+                continue
+
+            vector = res.get("vector")
+            if isinstance(vector, dict):
+                vector = vector.get("dense") or vector.get("vector")
+            if not vector:
+                continue
+
+            # Force routing into the system_ontology block (the stitch step sends
+            # any candidate whose namespace contains "reference"/"doc"/"spec" there).
+            md = {
+                **md,
+                "namespace": "reference",
+                "source": f'{md.get("product", "ref")}@{md.get("version", "?")}',
+            }
+            candidates.append(
+                Candidate(
+                    id=str(res.get("id")),
+                    content=str(content),
+                    vector=list(vector),
+                    metadata=md,
+                    token_count=0,
+                )
+            )
+        return candidates
+
+    except requests.HTTPError as e:
+        if e.response is not None and e.response.status_code == 404:
+            log.warning("Qdrant collection missing, skipping reference recall")
+            return []
+        raise
+
+
 def _maximal_marginal_relevance(
     query_vec: List[float],
     candidates: List[Candidate],
@@ -505,11 +644,22 @@ def _assemble_context(
         static_rules = _extract_static_rules(static_rows)
         static_tokens_est = 200
 
-    # 3) Dense retrieval
+    # 3) Dense retrieval (dynamic memory, project-scoped)
     with telemetry.step(
         request_id=request_id, project_id=project_id, name="qdrant_search"
     ):
         raw_candidates = _qdrant_dense(project_id, query_vec, DENSE_PREFETCH)
+
+    # 3b) Reference retrieval (mode-gated; Doc 03 §6). Reference carries no
+    #     project_id, so it is invisible to the project-scoped path above.
+    #     Safe-default mode is engineering (Doc 02 §8.1), so this is on by default.
+    if REFERENCE_RETRIEVAL_ENABLED and (mode or "engineering") in REFERENCE_MODES:
+        with telemetry.step(
+            request_id=request_id, project_id=project_id, name="qdrant_reference"
+        ):
+            ref_candidates = _qdrant_reference(query_vec, DENSE_PREFETCH)
+        # Prepend reference so it competes in MMR and lands in system_ontology.
+        raw_candidates = ref_candidates + raw_candidates
 
     # 4) Rerank (MMR)
     reranked = _maximal_marginal_relevance(
@@ -519,8 +669,8 @@ def _assemble_context(
         lambda_mult=MMR_LAMBDA,
     )
 
-    # 5) Stitch (budget: MAX_CONTEXT_TOKENS - static_tokens_est)
-    dense_budget = max(0, MAX_CONTEXT_TOKENS - static_tokens_est)
+    # 5) Stitch (budget: effective MAX_CONTEXT_TOKENS - static_tokens_est)
+    dense_budget = max(0, _effective_max_context_tokens() - static_tokens_est)
     (
         ontology_dict,
         context_dict,
@@ -729,7 +879,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         origin_hash=None,
         model_requested=model_requested,
         decided_mode=req.mode,
-        context_budget_max=MAX_CONTEXT_TOKENS,
+        context_budget_max=_effective_max_context_tokens(),
         static_tokens_est=None,
         dynamic_tokens_est=None,
     )
@@ -753,7 +903,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
 
         # Reserve budget for RAG + Canonical Envelope + Final Message + Buffer
         allowed_history_tokens = (
-            MAX_TOTAL_TOKENS - MAX_CONTEXT_TOKENS - user_text_tokens - 200
+            MAX_TOTAL_TOKENS - _effective_max_context_tokens() - user_text_tokens - 200
         )
 
         pruned_history = []
@@ -990,7 +1140,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             total_tokens=((prompt_tokens or 0) + (completion_tokens or 0))
             if (prompt_tokens is not None or completion_tokens is not None)
             else None,
-            context_budget_max=MAX_CONTEXT_TOKENS,
+            context_budget_max=_effective_max_context_tokens(),
             static_tokens_est=static_tokens_est
             if "static_tokens_est" in locals()
             else None,
