@@ -8,6 +8,7 @@ import time
 import os
 import json
 import requests
+from functools import partial
 from collections import deque
 from typing import Optional
 
@@ -68,7 +69,9 @@ def embed_text(text: str) -> list[float]:
 if qdrant:
     register_content_tools(mcp, qdrant, embed_text)
     register_diagnostics_tools(mcp, qdrant)
-    register_git_tools(mcp, ingest_text_fn=_ingest_text_internal)
+    # _ingest_text_internal now takes qdrant as its first positional arg; bind it
+    # so the git plane keeps calling ingest_text_fn(text=..., product=..., ...).
+    register_git_tools(mcp, ingest_text_fn=partial(_ingest_text_internal, qdrant))
 
 register_stability_tools(mcp)
 
