@@ -1,12 +1,15 @@
-
 # RUNTIME CONTRACT & OBSERVABILITY
+
 ## Environment Variables, C4 Architecture, and Dashboards
+
 ### Foundational Engineering Specification (Document 09 of 12)
+
 *Namespace: memory-steward • Owner: architecture-team*
 
----
+-----
 
 ## Navigation
+
 **← [Prev: Document 08 (Verification)](08_verification.md) | [Next: Document 10 (Landscape)](10_industry_landscape.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
@@ -18,19 +21,20 @@
 - [7. Log Aggregation Component (Vector)](#7-log-aggregation-component-vector)
 - [8. Closing Statement](#8-closing-statement)
 
----
+-----
 
 ## 0. Status, Scope, and Authority
 
 **Status:** FOUNDATIONAL
 **Audience:** Core maintainers, operators
 **Change policy:**
+
 - Append-only
 - No silent edits
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 1. Purpose
 
@@ -39,16 +43,16 @@ It replaces ad-hoc READMEs with a strict contract.
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 2. System Architecture (C4 Model)
 
-~~~mermaid
+```mermaid
 graph TD
     User((User))
 
     subgraph "Memory Steward System"
-        UI[AnythingLLM / UI]
+        UI[Open WebUI]
         Router[<b>Memory Router</b><br>Orchestrator]
         Steward[<b>Memory Steward</b><br>Admission Controller]
         Builder[<b>Builder LLM</b><br>vLLM / Inference]
@@ -72,15 +76,15 @@ graph TD
 
     Router -.->|Logs| Logs
     Steward -.->|Logs| Logs
-~~~
+```
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 3. Request Lifecycle (Sequence)
 
-~~~mermaid
+```mermaid
 sequenceDiagram
     participant U as User
     participant R as Router
@@ -104,67 +108,75 @@ sequenceDiagram
         S->>S: Extract Fragments
         S->>Q: Upsert Vector
     end
-~~~
+```
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 4. Environment Variable Contract
 
 ### 4.1 Memory Router
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `POSTGRES_DSN` | *Required* | Canonical storage connection. |
-| `QDRANT_URL` | `http://qdrant:6333` | Vector store endpoint. |
-| `BUILDER_BASE_URL` | *Required* | vLLM / OpenAI inference endpoint. |
-| `STEWARD_URL` | *Required* | Async admission endpoint. |
-| `MAX_CONTEXT_TOKENS` | `2000` | Safety cap for injection. |
+
+|Variable            |Default                 |Description                                                                                              |
+|:-------------------|:-----------------------|:--------------------------------------------------------------------------------------------------------|
+|`POSTGRES_DSN`      |*Required*              |Canonical storage connection.                                                                            |
+|`QDRANT_URL`        |`http://qdrant:6333`    |Vector store endpoint.                                                                                   |
+|`BUILDER_BASE_URL`  |*Required*              |vLLM / OpenAI inference endpoint.                                                                        |
+|`STEWARD_URL`       |*Required*              |Async admission endpoint.                                                                                |
+|`MAX_CONTEXT_TOKENS`|`2000`                  |Safety cap for injection.                                                                                |
+|`OPEN_WEBUI_URL`    |`http://open-webui:8080`|Open WebUI base URL for slash-command seeding.                                                           |
+|`OPEN_WEBUI_API_KEY`|*Optional*              |Open WebUI API key. Required for `/glap` slash-command auto-seeding. Set via `open-webui-api-key` secret.|
 
 ### 4.2 Memory Steward
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `MIN_CONFIDENCE` | `0.7` | Threshold for memory persistence. |
-| `EMBEDDINGS_URL` | *Required* | Service for vectorization. |
+
+|Variable        |Default   |Description                      |
+|:---------------|:---------|:--------------------------------|
+|`MIN_CONFIDENCE`|`0.7`     |Threshold for memory persistence.|
+|`EMBEDDINGS_URL`|*Required*|Service for vectorization.       |
 
 ### 4.3 Log Aggregator (Vector) [New]
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `LOG_DIR` | `/var/log/memory_steward_logs` | Root directory for persisted logs. |
-| `LOG_ROTATE_MAX_SIZE_MB` | `10` | Size threshold for rotation. |
-| `LOG_ROTATE_MAX_FILES` | `10` | Max rotated files per log. |
-| `LOG_RETENTION_DAYS` | `14` | Age horizon for purge. |
-| `LOG_TOTAL_CAP_MB` | `5120` | Global cap for all logs under `LOG_DIR`. |
+
+|Variable                |Default                       |Description                             |
+|:-----------------------|:-----------------------------|:---------------------------------------|
+|`LOG_DIR`               |`/var/log/memory_steward_logs`|Root directory for persisted logs.      |
+|`LOG_ROTATE_MAX_SIZE_MB`|`10`                          |Size threshold for rotation.            |
+|`LOG_ROTATE_MAX_FILES`  |`10`                          |Max rotated files per log.              |
+|`LOG_RETENTION_DAYS`    |`14`                          |Age horizon for purge.                  |
+|`LOG_TOTAL_CAP_MB`      |`5120`                        |Global cap for all logs under `LOG_DIR`.|
 
 ### 4.4 MCP Diagnostics [New]
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `MCP_MAX_LINES` | `1000` | Hard cap for `logs.read`. |
-| `MCP_MAX_WINDOW_MINUTES` | `360` | Hard cap for `smart_search` time window. |
-| `MCP_RESPONSE_MAX_BYTES` | `524288` | Response size ceiling (bytes). |
+
+|Variable                |Default |Description                             |
+|:-----------------------|:-------|:---------------------------------------|
+|`MCP_MAX_LINES`         |`1000`  |Hard cap for `logs.read`.               |
+|`MCP_MAX_WINDOW_MINUTES`|`360`   |Hard cap for `smart_search` time window.|
+|`MCP_RESPONSE_MAX_BYTES`|`524288`|Response size ceiling (bytes).          |
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 5. Dashboard Specification
 
 Dashboards are powered by the **Diagnostics Plane** (Postgres `telemetry` schema).
 
 ### 5.1 Grafana Views (Canonical)
-1.  **Router Overview:** RPS, Error Rate, Latency (p95).
-2.  **Steward Health:** Admission Lag, Fragments Inserted per Minute.
-3.  **Retrieval Quality:** "Zero Candidate" rate (Blind spots).
+
+1. **Router Overview:** RPS, Error Rate, Latency (p95).
+1. **Steward Health:** Admission Lag, Fragments Inserted per Minute.
+1. **Retrieval Quality:** “Zero Candidate” rate (Blind spots).
 
 ### 5.2 Verification
-~~~sql
+
+```sql
 -- Check if telemetry is flowing
 SELECT count(*) FROM telemetry.request WHERE created_at > now() - interval '1 hour';
-~~~
+```
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 7. Log Aggregation Component (Vector)
 
@@ -185,6 +197,7 @@ SELECT count(*) FROM telemetry.request WHERE created_at > now() - interval '1 ho
   - `LOG_TZ` (default cluster timezone) for timestamp normalization
 
 **Kubernetes Resources**
+
 - **DaemonSet:** `vector-agent`
 - **ConfigMap:** `vector-config` (immutable pipeline and retention rules)
 - **PVC:** `vector-logs` (ReadWriteOnce) mounted at `LOG_DIR`
@@ -192,13 +205,22 @@ SELECT count(*) FROM telemetry.request WHERE created_at > now() - interval '1 ho
 
 [Back to top](#navigation)
 
----
+-----
 
 ## 8. Closing Statement
 
 This runtime contract ensures that deployment is deterministic.
 If the Env Vars match, the C4 architecture holds true.
 
----
+-----
+
+## Amendment 09.1: Open WebUI Frontend
+
+**Date:** 2026
+**Scope:** Sections 2, 3, 4.1
+
+The frontend component has been replaced from AnythingLLM to **Open WebUI**. All references to `AnythingLLM / UI` in the C4 diagram and sequence diagram now refer to `Open WebUI`. Two new environment variables have been added to the Memory Router contract (`OPEN_WEBUI_URL`, `OPEN_WEBUI_API_KEY`) to support lazy slash-command seeding via `mcp_bridge.py`. The `open-webui` service is added to the log aggregation file layout (see Doc 06 Section 11.2).
+
+-----
 
 **END OF DOCUMENT 09**
