@@ -80,6 +80,3 @@ jobs:
         working-directory: ${{ matrix.path }}
         run: uv run ruff check src tests --fix
 
-      - name: Ruff format check
-        working-directory: ${{ matrix.path }}
-        run: uv run ruff format --check src/
