@@ -48,7 +48,7 @@ addopts = "-v --tb=short"
 pythonpath = ["src"]
 
 [tool.ruff]
-line-length = 125
+line-length = 150
 target-version = "py311"
 
 [tool.ruff.lint]
