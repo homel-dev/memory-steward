@@ -1,3 +1,4 @@
+# components/memory_router/src/memory_router/mcp_bridge.py
 # memory_router/mcp_bridge.py
 
 import os
