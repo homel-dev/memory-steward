@@ -1,3 +1,4 @@
+# k8s/open-webui.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,7 +19,6 @@ spec:
           image: ghcr.io/open-webui/open-webui:main
           imagePullPolicy: Always
           env:
-            # --- LLM backend: memory-router ---
             - name: ENABLE_OPENAI_API
               value: "true"
             - name: OPENAI_API_BASE_URL
@@ -27,8 +27,6 @@ spec:
               value: "dummy"
             - name: ENABLE_OLLAMA_API
               value: "false"
-
-            # --- STT: LIST service ---
             - name: AUDIO_STT_ENGINE
               value: "openai"
             - name: AUDIO_STT_OPENAI_API_BASE_URL
@@ -37,8 +35,6 @@ spec:
               value: "dummy"
             - name: AUDIO_STT_MODEL
               value: "whisper-1"
-
-            # --- Disable background LLM requests ---
             - name: ENABLE_AUTOCOMPLETE_GENERATION
               value: "false"
             - name: ENABLE_FOLLOW_UP_GENERATION
@@ -49,8 +45,6 @@ spec:
               value: "false"
             - name: ENABLE_SEARCH_QUERY_GENERATION
               value: "false"
-
-            # --- Auth & misc ---
             - name: WEBUI_SECRET_KEY
               valueFrom:
                 secretKeyRef:
@@ -66,8 +60,6 @@ spec:
               value: "false"
             - name: ENABLE_MESSAGE_RATING
               value: "false"
-
-            # --- Open WebUI API key for /glap slash-command seeding ---
             - name: OPEN_WEBUI_API_KEY
               valueFrom:
                 secretKeyRef:
