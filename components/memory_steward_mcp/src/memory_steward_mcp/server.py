@@ -25,9 +25,10 @@ from memory_steward_mcp.config import (
 )
 
 # Plane Registries
-from memory_steward_mcp.content_plane import register_content_tools
+from memory_steward_mcp.content_plane import register_content_tools, _ingest_text_internal
 from memory_steward_mcp.stability_plane import register_stability_tools
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
+from memory_steward_mcp.git_plane import register_git_tools
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -50,9 +51,15 @@ except Exception as e:
     qdrant = None
 
 def embed_text(text: str) -> list[float]:
-    r = requests.post(EMBEDDINGS_URL, json={"text": text}, timeout=10)
+    # Correct path and payload — embeddings service expects POST /embed
+    # with {"texts": [...], "normalize": true}
+    r = requests.post(
+        f"{EMBEDDINGS_URL}/embed",
+        json={"texts": [text], "normalize": True},
+        timeout=10,
+    )
     r.raise_for_status()
-    return r.json()["vector"]
+    return r.json()["vectors"][0]
 
 # ==============================================================================
 # 2. PLANE REGISTRATION
@@ -61,6 +68,7 @@ def embed_text(text: str) -> list[float]:
 if qdrant:
     register_content_tools(mcp, qdrant, embed_text)
     register_diagnostics_tools(mcp, qdrant)
+    register_git_tools(mcp, ingest_text_fn=_ingest_text_internal)
 
 register_stability_tools(mcp)
 
