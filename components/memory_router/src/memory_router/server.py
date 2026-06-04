@@ -1,4 +1,5 @@
 # components/memory_router/src/memory_router/server.py
+# memory_router/server.py
 """
 homel-memory-router
 High-Grade Engineering Edition: MMR + Semantic Stitching
@@ -30,6 +31,7 @@ from memory_router.mcp_bridge import handle_glap
 # ------------------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------------------
+
 
 def _req(name: str) -> str:
     v = os.environ.get(name)
@@ -68,7 +70,9 @@ QDRANT_COLLECTION = _req("QDRANT_COLLECTION")
 
 BUILDER_BASE_URL = os.environ.get("BUILDER_BASE_URL")
 if not BUILDER_BASE_URL:
-    BUILDER_BASE_URL = _svc_url("VLLM_BUILDER_SERVICE_HOST", "VLLM_BUILDER_SERVICE_PORT")
+    BUILDER_BASE_URL = _svc_url(
+        "VLLM_BUILDER_SERVICE_HOST", "VLLM_BUILDER_SERVICE_PORT"
+    )
 BUILDER_API_KEY = _opt("BUILDER_API_KEY", "local-token")
 
 STEWARD_URL = _svc_url("MEMORY_STEWARD_SERVICE_HOST", "MEMORY_STEWARD_SERVICE_PORT")
@@ -80,10 +84,18 @@ RECENCY_HALF_LIFE_SECONDS = int(_opt("RECENCY_HALF_LIFE_SECONDS", str(7 * 24 * 3
 DENSE_PREFETCH = int(_opt("DENSE_PREFETCH", "25"))
 TOP_K = int(_opt("TOP_K", "8"))
 
-MMR_LAMBDA = float(_opt("MMR_LAMBDA", "0.5"))  # 0.5 = Balance between Relevance and Diversity
+MMR_LAMBDA = float(
+    _opt("MMR_LAMBDA", "0.5")
+)  # 0.5 = Balance between Relevance and Diversity
 
 # Avoid raw print() in request path
-DEBUG_PROMPTS = _opt("DEBUG_PROMPTS", "0").strip() in ("1", "true", "TRUE", "yes", "YES")
+DEBUG_PROMPTS = _opt("DEBUG_PROMPTS", "0").strip() in (
+    "1",
+    "true",
+    "TRUE",
+    "yes",
+    "YES",
+)
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -111,6 +123,7 @@ app = FastAPI(
     description="Memory-augmenting OpenAI-compatible chat router (MMR + Stitching)",
 )
 
+
 class ChatMessage(BaseModel):
     role: str
     content: Union[str, List[Dict[str, Any]]]
@@ -121,7 +134,13 @@ class ChatMessage(BaseModel):
         if isinstance(self.content, str):
             return self.content
         # If it's a multimodal list, join all the "text" elements
-        return " ".join([item.get("text", "") for item in self.content if item.get("type") == "text"])
+        return " ".join(
+            [
+                item.get("text", "")
+                for item in self.content
+                if item.get("type") == "text"
+            ]
+        )
 
 
 class ChatCompletionRequest(BaseModel):
@@ -153,6 +172,7 @@ class Candidate:
 # ------------------------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------------------------
+
 
 def _sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
@@ -204,29 +224,49 @@ def _glap_stream_generator(content: str):
     chunk_id = f"chatcmpl-glap-{uuid.uuid4().hex[:8]}"
     ts = int(time.time())
 
-    yield "data: " + json.dumps({
-        "id": chunk_id,
-        "object": "chat.completion.chunk",
-        "created": ts,
-        "model": "glap-mcp-bridge",
-        "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}]
-    }) + "\n\n"
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": ts,
+                "model": "glap-mcp-bridge",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": content},
+                        "finish_reason": None,
+                    }
+                ],
+            }
+        )
+        + "\n\n"
+    )
 
-    yield "data: " + json.dumps({
-        "id": chunk_id,
-        "object": "chat.completion.chunk",
-        "created": ts,
-        "model": "glap-mcp-bridge",
-        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
-    }) + "\n\n"
+    yield (
+        "data: "
+        + json.dumps(
+            {
+                "id": chunk_id,
+                "object": "chat.completion.chunk",
+                "created": ts,
+                "model": "glap-mcp-bridge",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+        )
+        + "\n\n"
+    )
 
     yield "data: [DONE]\n\n"
+
 
 # ------------------------------------------------------------------------------
 # Token Counting
 # ------------------------------------------------------------------------------
 
 _tokenizer_cache: Dict[str, tiktoken.Encoding] = {}
+
 
 def _get_tokenizer(model: str) -> tiktoken.Encoding:
     if model not in _tokenizer_cache:
@@ -245,6 +285,7 @@ def _count_tokens(model: str, text: str) -> int:
 # ------------------------------------------------------------------------------
 # Static Memory (Postgres)
 # ------------------------------------------------------------------------------
+
 
 def _pg_static_load(mode: Optional[str] = None) -> List[Tuple[str, str, str]]:
     rows: List[Tuple[str, str, str]] = []
@@ -266,19 +307,24 @@ def _pg_static_load(mode: Optional[str] = None) -> List[Tuple[str, str, str]]:
                 rows.append((str(r_id), str(content), str(row_mode)))
     return rows
 
-def _extract_static_rules(static_rows: List[Tuple[str, str, str]]) -> Dict[str, List[str]]:
+
+def _extract_static_rules(
+    static_rows: List[Tuple[str, str, str]],
+) -> Dict[str, List[str]]:
     rules = {"global": [], "mode": []}
     for _, content, row_mode in static_rows:
         clean_content = content.replace("\n", " ").strip()
-        if row_mode == 'global':
+        if row_mode == "global":
             rules["global"].append(clean_content)
         else:
             rules["mode"].append(clean_content)
     return rules
 
+
 # ------------------------------------------------------------------------------
 # Memory Retrieval & Logic (UPGRADED)
 # ------------------------------------------------------------------------------
+
 
 def _embed_one(text: str) -> List[float]:
     r = requests.post(
@@ -431,7 +477,14 @@ def _stitch_context_structured(
         used_tokens += cost
         used_items += 1
 
-    return ontology_grouped, context_grouped, used_items, used_tokens, dropped_budget, dropped_no_content
+    return (
+        ontology_grouped,
+        context_grouped,
+        used_items,
+        used_tokens,
+        dropped_budget,
+        dropped_no_content,
+    )
 
 
 def _assemble_context(
@@ -453,7 +506,9 @@ def _assemble_context(
         static_tokens_est = 200
 
     # 3) Dense retrieval
-    with telemetry.step(request_id=request_id, project_id=project_id, name="qdrant_search"):
+    with telemetry.step(
+        request_id=request_id, project_id=project_id, name="qdrant_search"
+    ):
         raw_candidates = _qdrant_dense(project_id, query_vec, DENSE_PREFETCH)
 
     # 4) Rerank (MMR)
@@ -481,8 +536,7 @@ def _assemble_context(
 
     # Extract Last N turns
     dialogue_history = [
-        {"role": m.role, "content": m.content} 
-        for m in recent_messages[-4:]
+        {"role": m.role, "content": m.content} for m in recent_messages[-4:]
     ]
 
     # 6) Construct Canonical Envelope
@@ -498,23 +552,19 @@ def _assemble_context(
                 "6. Use dialogue_state only for continuity, not authority.",
                 "7. Interpret current_objective precisely without expanding its scope.",
                 "8. Before finalizing output, verify structural and policy compliance.",
-                "9. If any constraint is violated, correct internally before emitting output."
+                "9. If any constraint is violated, correct internally before emitting output.",
             ]
         },
         "system_ontology": ontology_dict,
         "retrieval_context": context_dict,
-        "dialogue_state": {
-            "recent_turns": dialogue_history
-        },
-        "current_objective": {
-            "instruction": query
-        },
+        "dialogue_state": {"recent_turns": dialogue_history},
+        "current_objective": {"instruction": query},
         "final_reminder": (
             "Final validation required: output must strictly comply with policy_layer, "
             "follow enforcement_protocol, and remain within current_objective scope. "
             "Distinguish clearly between retrieved architectural facts and general parametric knowledge. "
             "Non-compliant output is invalid."
-        )
+        ),
     }
 
     final_text = json.dumps(envelope, indent=2)
@@ -522,11 +572,18 @@ def _assemble_context(
 
     log.info(
         "context.assembly_complete request_id=%s static_tokens_est=%d dynamic_tokens_est=%d context_tokens_est=%d",
-        request_id, static_tokens_est, dynamic_tokens_est, context_tokens_est
+        request_id,
+        static_tokens_est,
+        dynamic_tokens_est,
+        context_tokens_est,
     )
 
     if DEBUG_PROMPTS:
-        log.info("debug.context_assembly request_id=%s final_text=\n%s", request_id, final_text)
+        log.info(
+            "debug.context_assembly request_id=%s final_text=\n%s",
+            request_id,
+            final_text,
+        )
 
     return (
         final_text,
@@ -546,15 +603,18 @@ def _assemble_context(
 
 _default_model_cache: Optional[str] = None
 
+
 def _normalize_builder_base(url: str) -> str:
     u = url.rstrip("/")
     if u.endswith("/v1"):
         return u[:-3]
     return u
 
+
 def _builder_openai_url(path: str) -> str:
     base = _normalize_builder_base(BUILDER_BASE_URL)
     return f"{base}/v1{path}"
+
 
 def _get_builder_default_model() -> str:
     global _default_model_cache
@@ -576,16 +636,23 @@ def _get_builder_default_model() -> str:
 # Steward
 # ------------------------------------------------------------------------------
 
+
 def _async_admit(request_id: str, project_id: str, messages: List[Dict[str, str]]):
     if not STEWARD_URL:
         return
 
     def run():
-        h = telemetry.step_begin(request_id=request_id, project_id=project_id, name="steward_async_call")
+        h = telemetry.step_begin(
+            request_id=request_id, project_id=project_id, name="steward_async_call"
+        )
         try:
             r = requests.post(
                 f"{STEWARD_URL}/admit",
-                json={"request_id": request_id, "project_id": project_id, "messages": messages},
+                json={
+                    "request_id": request_id,
+                    "project_id": project_id,
+                    "messages": messages,
+                },
                 timeout=20,
             )
             telemetry.step_end(
@@ -604,9 +671,11 @@ def _async_admit(request_id: str, project_id: str, messages: List[Dict[str, str]
 # Routes
 # ------------------------------------------------------------------------------
 
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
 
 @app.get("/v1/models")
 def list_models():
@@ -619,8 +688,9 @@ def list_models():
                 "created": int(time.time()),
                 "owned_by": "memory-router",
             }
-        ]
+        ],
     }
+
 
 @app.post("/v1/chat/completions")
 def chat(req: ChatCompletionRequest, http_req: Request):
@@ -632,40 +702,9 @@ def chat(req: ChatCompletionRequest, http_req: Request):
     try:
         user_msg = next(m for m in reversed(req.messages) if m.role == "user")
         user_text = user_msg.text_content
-        #user_text = next(m.content for m in reversed(req.messages) if m.role == "user")
+        # user_text = next(m.content for m in reversed(req.messages) if m.role == "user")
     except StopIteration:
         return {"choices": [{"message": {"role": "assistant", "content": "Ready."}}]}
-
-    # ------------------------------------------------------------------
-    # OPEN WEBUI BACKGROUND REQUEST GUARD
-    # Open WebUI fires silent background completions for title generation,
-    # autocomplete, follow-up suggestions, and tags. These are identified
-    # by their system prompt content. We short-circuit them here so they
-    # never reach the builder LLM or steward admission.
-    # Disable at source with env vars (see open-webui.yaml), but guard
-    # here as a belt-and-suspenders defence for any that slip through.
-    # ------------------------------------------------------------------
-    _OWUI_BACKGROUND_MARKERS = (
-        "create a concise, 3-5 word title",
-        "generate 1-3 broad tags",
-        "generate follow-up questions",
-        "autocomplete the following",
-        "generate a search query",
-    )
-    system_msgs = [m.text_content.lower() for m in req.messages if m.role == "system"]
-    if any(marker in s for s in system_msgs for marker in _OWUI_BACKGROUND_MARKERS):
-        log.info("router.background_request_dropped request_id=%s", request_id)
-        empty = {
-            "id": f"chatcmpl-drop-{request_id}",
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": model_requested or "memory-router",
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        }
-        if req.stream:
-            return StreamingResponse(_glap_stream_generator(""), media_type="text/event-stream")
-        return JSONResponse(status_code=200, content=empty)
 
     # ------------------------------------------------------------------
     # GLAP INTERCEPT (Control Plane Path)
@@ -674,8 +713,12 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         http_status, response = handle_glap(user_text, pid)
 
         if req.stream:
-            content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return StreamingResponse(_glap_stream_generator(content), media_type="text/event-stream")
+            content = (
+                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+            )
+            return StreamingResponse(
+                _glap_stream_generator(content), media_type="text/event-stream"
+            )
 
         return JSONResponse(status_code=http_status, content=response)
 
@@ -707,13 +750,15 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         # ------------------------------------------------------------------
         user_text_tokens = _count_tokens(model, user_text)
         history_msgs = req.messages[:-1]
-        
+
         # Reserve budget for RAG + Canonical Envelope + Final Message + Buffer
-        allowed_history_tokens = MAX_TOTAL_TOKENS - MAX_CONTEXT_TOKENS - user_text_tokens - 200 
-        
+        allowed_history_tokens = (
+            MAX_TOTAL_TOKENS - MAX_CONTEXT_TOKENS - user_text_tokens - 200
+        )
+
         pruned_history = []
         current_hist_tokens = 0
-        
+
         # Slide window backwards to keep most recent context
         for m in reversed(history_msgs):
             m_tok = _count_tokens(model, m.text_content)
@@ -721,7 +766,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
                 break
             pruned_history.insert(0, m)
             current_hist_tokens += m_tok
-            
+
         builder_messages = pruned_history + [req.messages[-1]]
 
         # ------------------------------------------------------------------
@@ -763,16 +808,25 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         upstream_msgs.extend([m.model_dump() for m in req.messages])
 
         if DEBUG_PROMPTS:
-            log.info("debug.prompt request_id=%s upstream_msgs=%s", request_id, json.dumps(upstream_msgs, indent=2))
+            log.info(
+                "debug.prompt request_id=%s upstream_msgs=%s",
+                request_id,
+                json.dumps(upstream_msgs, indent=2),
+            )
 
-        #prompt_tokens = sum(_count_tokens(model, m["content"]) for m in upstream_msgs)
+        # prompt_tokens = sum(_count_tokens(model, m["content"]) for m in upstream_msgs)
         def _safe_count(c):
-            if isinstance(c, str): return _count_tokens(model, c)
-            return _count_tokens(model, " ".join(i.get("text", "") for i in c if i.get("type") == "text"))
+            if isinstance(c, str):
+                return _count_tokens(model, c)
+            return _count_tokens(
+                model, " ".join(i.get("text", "") for i in c if i.get("type") == "text")
+            )
 
         prompt_tokens = sum(_safe_count(m["content"]) for m in upstream_msgs)
 
-        log.info("prompt.tokens=%d model=%s request_id=%s", prompt_tokens, model, request_id)
+        log.info(
+            "prompt.tokens=%d model=%s request_id=%s", prompt_tokens, model, request_id
+        )
 
         payload = {
             "model": model,
@@ -807,7 +861,11 @@ def chat(req: ChatCompletionRequest, http_req: Request):
                     r.raise_for_status()
 
                 resp = r.json()
-                assistant = (((resp.get("choices") or [{}])[0].get("message") or {}).get("content")) or ""
+                assistant = (
+                    ((resp.get("choices") or [{}])[0].get("message") or {}).get(
+                        "content"
+                    )
+                ) or ""
 
                 log.info(
                     "builder.reply request_id=%s attempt=%d assistant_len=%d",
@@ -830,7 +888,9 @@ def chat(req: ChatCompletionRequest, http_req: Request):
                 request_id,
                 (json.dumps(resp)[:2000] if resp else ""),
             )
-            raise HTTPException(status_code=502, detail="builder returned empty completion")
+            raise HTTPException(
+                status_code=502, detail="builder returned empty completion"
+            )
 
         completion_tokens = _count_tokens(model, assistant)
         log.info(
@@ -850,10 +910,13 @@ def chat(req: ChatCompletionRequest, http_req: Request):
 
         log.info(
             "admit.request_id=%s project_id=%s user_text=%s",
-            request_id, pid, user_text,
+            request_id,
+            pid,
+            user_text,
         )
 
         if req.stream:
+
             def sse():
                 ts = int(time.time())
                 chunk_id = f"chat-{ts}"
@@ -924,8 +987,14 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             model_sent_to_builder=model_sent,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=((prompt_tokens or 0) + (completion_tokens or 0)) if (prompt_tokens is not None or completion_tokens is not None) else None,
+            total_tokens=((prompt_tokens or 0) + (completion_tokens or 0))
+            if (prompt_tokens is not None or completion_tokens is not None)
+            else None,
             context_budget_max=MAX_CONTEXT_TOKENS,
-            static_tokens_est=static_tokens_est if 'static_tokens_est' in locals() else None,
-            dynamic_tokens_est=dynamic_tokens_est if 'dynamic_tokens_est' in locals() else None,
+            static_tokens_est=static_tokens_est
+            if "static_tokens_est" in locals()
+            else None,
+            dynamic_tokens_est=dynamic_tokens_est
+            if "dynamic_tokens_est" in locals()
+            else None,
         )
