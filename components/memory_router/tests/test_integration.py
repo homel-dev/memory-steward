@@ -200,8 +200,19 @@ class TestStaticRulesAlwaysInjected:
                 "stream": False,
             })
 
+        import json
         messages = captured.get("messages", [])
         system_content = " ".join(
             m.get("content", "") for m in messages if m.get("role") == "system"
         )
-        assert "Always respond in English" in system_content
+        # Static rules are serialised into the canonical envelope JSON under
+        # policy_layer.global — parse and check there
+        try:
+            envelope = json.loads(system_content)
+            global_rules = envelope.get("policy_layer", {}).get("global", [])
+            assert any("Always respond in English" in r for r in global_rules), (
+                f"Static rule not found in policy_layer.global. Got: {global_rules}"
+            )
+        except json.JSONDecodeError:
+            # Fallback: plain string check
+            assert "Always respond in English" in system_content
