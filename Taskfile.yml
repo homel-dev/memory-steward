@@ -26,7 +26,7 @@ tasks:
   up:
     desc: "Full Bootstrap: Bootstrap -> Deploy -> Wait -> Init -> Verify"
     cmds:
-      - minikube start --driver=docker --cpus=8 --memory=16384
+      - minikube start --driver=docker --cpus=8 --memory=16384 --gpus all
       - task: k8s:deploy
       - task: ingress:setup
       - task: k8s:wait

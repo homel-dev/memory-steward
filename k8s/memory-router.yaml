@@ -26,7 +26,7 @@ spec:
     spec:
       containers:
         - name: router
-          image: ghcr.io/homel-dev/memory-steward/memory-router:0.1.0
+          image: ghcr.io/homel-dev/memory-steward/memory-router:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

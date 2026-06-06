@@ -23,7 +23,7 @@ spec:
 
       containers:
         - name: list
-          image:  ghcr.io/homel-dev/memory-steward/memory-steward-list:0.1.0
+          image:  ghcr.io/homel-dev/memory-steward/memory-steward-list:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8001
