@@ -1,0 +1,41 @@
+# k8s/backup/backup-cronjob.yaml
+# Nightly Postgres dump + Qdrant snapshot to the backups PVC, via the tooling
+# image (backup.sh handles both). Replaces pg-backup-cronjob.yaml and
+# qdrant-backup-cronjob.yaml (delete those two).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: backup
+  namespace: ms
+spec:
+  schedule: "0 3 * * *"          # 03:00 daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: memory-tooling
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              # Local minikube default. For GHCR: ghcr.io/<owner>/<repo>/tooling:latest
+              image: homel/tooling:dev
+              imagePullPolicy: IfNotPresent
+              command: ["bash", "/opt/tooling/backup.sh"]
+              env:
+                - {name: PGHOST,            value: "postgres"}
+                - {name: PGUSER,            value: "homel"}
+                - {name: PGPASSWORD,        value: "homel"}
+                - {name: PGDATABASE,        value: "homel"}
+                - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                - {name: QDRANT_COLLECTION, value: "homel_memory"}
+                - {name: RETAIN,            value: "14"}
+              volumeMounts:
+                - {name: backups, mountPath: /backups}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: backups
