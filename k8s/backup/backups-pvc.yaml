@@ -1,0 +1,16 @@
+# k8s/backup/backups-pvc.yaml
+# In-cluster backup store for the unattended CronJobs below.
+# NOTE: this PVC lives in namespace 'ms' and is therefore destroyed by
+# `task down` / `task nuke`. It survives pod/node loss, NOT a namespace wipe.
+# For true disaster recovery, also pull copies off-cluster (task db:backup /
+# qdrant:backup write to ./backups on your machine) or ship these to object storage.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backups
+  namespace: ms
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
