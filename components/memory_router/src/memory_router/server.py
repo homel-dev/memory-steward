@@ -1,9 +1,4 @@
 # components/memory_router/src/memory_router/server.py
-# memory_router/server.py
-"""
-homel-memory-router
-High-Grade Engineering Edition: MMR + Semantic Stitching
-"""
 
 import os
 import json
@@ -154,6 +149,23 @@ def _runtime_int(key: str, default: int) -> int:
 
 def _effective_max_context_tokens() -> int:
     return _runtime_int("MAX_CONTEXT_TOKENS", MAX_CONTEXT_TOKENS_DEFAULT)
+
+
+def _runtime_str(key: str, default: str) -> str:
+    """Resolve a string knob from runtime_config, falling back to the env default.
+    Empty string in the table is treated as 'unset' so a blank row never wins."""
+    raw = _runtime_config_snapshot().get(key)
+    return raw if raw else default
+
+
+def _effective_builder_base_url() -> str:
+    # Live override via runtime_config; the import-time env value is the default.
+    return _runtime_str("BUILDER_BASE_URL", BUILDER_BASE_URL)
+
+
+def _effective_builder_model() -> str:
+    # Live override via runtime_config; the import-time env value is the default.
+    return _runtime_str("BUILDER_MODEL", BUILDER_MODEL)
 
 # ------------------------------------------------------------------------------
 # Logging
@@ -762,7 +774,7 @@ def _normalize_builder_base(url: str) -> str:
 
 
 def _builder_openai_url(path: str) -> str:
-    base = _normalize_builder_base(BUILDER_BASE_URL)
+    base = _normalize_builder_base(_effective_builder_base_url())
     return f"{base}/v1{path}"
 
 
@@ -892,7 +904,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
     completion_tokens: Optional[int] = None
 
     try:
-        model = BUILDER_MODEL or _get_builder_default_model()
+        model = _effective_builder_model() or _get_builder_default_model()
         model_sent = model
 
         # ------------------------------------------------------------------
