@@ -103,32 +103,73 @@ tasks:
       - task: migrate:up
       - task: db:init-qdrant
 
+
   db:init-qdrant:
     internal: true
     cmds:
       - |
-        echo "Ensuring Qdrant collection..."
-        kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
-          set -eu
-          BASE="http://qdrant:6333"; COL="{{.QDRANT_COLLECTION}}"
-          if curl -fsS "$BASE/collections/$COL" >/dev/null 2>&1; then
-            echo "Collection $COL exists, skipping"; exit 0
-          fi
-          curl -fsS -X PUT "$BASE/collections/$COL" -H "Content-Type: application/json" \
-            -d "{\"vectors\":{\"dense\":{\"size\":384,\"distance\":\"Cosine\"}},\"sparse_vectors\":{\"lexical\":{\"modifier\":\"idf\"}},\"on_disk_payload\":true}"
-          echo "Collection $COL created"
-        '
+        set -e
+        kubectl delete job tooling-qdrant-init -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-qdrant-init, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 180
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: qdrant-init
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["bash","/opt/tooling/init_qdrant.sh","ensure"]
+                  env:
+                    - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                    - {name: QDRANT_COLLECTION, value: "{{.QDRANT_COLLECTION}}"}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-qdrant-init -n {{.NAMESPACE}} --timeout=120s \
+          || { kubectl logs job/tooling-qdrant-init -n {{.NAMESPACE}}; exit 1; }
+        kubectl logs job/tooling-qdrant-init -n {{.NAMESPACE}}
 
   db:reset:
     desc: "🔥 DESTRUCTIVE: drop & rebuild Postgres schema + Qdrant collection"
     prompt: "This ERASES all Postgres tables and the Qdrant collection. Continue?"
     cmds:
-      - kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- psql -U homel -d homel -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
       - |
-        kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
-          curl -fsS -X DELETE "http://qdrant:6333/collections/{{.QDRANT_COLLECTION}}" || true
-        '
+        set -e
+        kubectl delete job tooling-reset -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-reset, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 180
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: reset
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["sh","-c","psql -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' && bash /opt/tooling/init_qdrant.sh delete"]
+                  env:
+                    - {name: PGHOST,            value: "postgres"}
+                    - {name: PGUSER,            value: "homel"}
+                    - {name: PGPASSWORD,        value: "homel"}
+                    - {name: PGDATABASE,        value: "homel"}
+                    - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                    - {name: QDRANT_COLLECTION, value: "{{.QDRANT_COLLECTION}}"}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-reset -n {{.NAMESPACE}} --timeout=180s \
+          || { kubectl logs job/tooling-reset -n {{.NAMESPACE}}; exit 1; }
+        kubectl logs job/tooling-reset -n {{.NAMESPACE}}
       - task: db:init
+
 
   db:shell:
     desc: "Open PSQL shell"
