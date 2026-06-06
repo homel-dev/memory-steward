@@ -1,3 +1,4 @@
+# .github/workflows/build-images.yml
 name: Build & Publish images to GHCR (amd64 & arm64)
 
 concurrency:
@@ -39,6 +40,11 @@ jobs:
           - component: memory-steward-list
             context: ./components/memory_steward_list
             dockerfile: ./components/memory_steward_list/Dockerfile
+          # Tooling image: migrate / backup / restore / export.
+          # Context is the REPO ROOT so the Dockerfile can copy scripts/ and sql/migrations/.
+          - component: tooling
+            context: .
+            dockerfile: ./components/tooling/Dockerfile
 
     steps:
       - name: Check out
