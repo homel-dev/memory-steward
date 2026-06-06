@@ -1,0 +1,47 @@
+# k8s/backup/qdrant-backup-cronjob.yaml
+# Nightly Qdrant snapshot: create via API, download to backups PVC, then drop
+# the server-side copy. Keeps the most recent 14 snapshots.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: qdrant-backup
+  namespace: ms
+spec:
+  schedule: "30 3 * * *"         # 03:30 daily (staggered after pg-backup)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: qdrant-snapshot
+              image: curlimages/curl:8.5.0
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -eu
+                  BASE="http://qdrant:6333"
+                  COL="homel_memory"
+                  mkdir -p /backups/qdrant
+                  echo "Creating snapshot of $COL ..."
+                  NAME=$(curl -fsS -X POST "$BASE/collections/$COL/snapshots" \
+                         | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+                  [ -n "$NAME" ] || { echo "snapshot create failed"; exit 1; }
+                  echo "Downloading $NAME ..."
+                  curl -fsS "$BASE/collections/$COL/snapshots/$NAME" \
+                       -o "/backups/qdrant/$NAME"
+                  # Free server-side copy; we now hold it on the PVC.
+                  curl -fsS -X DELETE "$BASE/collections/$COL/snapshots/$NAME" >/dev/null || true
+                  # Retain the newest 14 snapshots.
+                  ls -1t /backups/qdrant/*.snapshot 2>/dev/null | tail -n +15 | xargs -r rm -f || true
+                  echo "done"
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: backups
