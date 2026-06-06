@@ -1,3 +1,4 @@
+# Taskfile.yml
 version: '3'
 
 vars:
@@ -8,11 +9,8 @@ vars:
     sh: kubectl get pod -n {{.NAMESPACE}} -l app=postgres -o jsonpath='{.items[0].metadata.name}' || echo ""
   INGRESS_HTTP_PORT: '30080'
   INGRESS_HTTPS_PORT: '30443'
-#  UI_PORT: '30080'  # open-webui is served via ingress, not NodePort
-#  LIST_PORT: '30002'
-#  ENV_FILE: '/etc/minikube-proxy.conf'
-#  UNIT_NAME: 'minikube-proxy@.service'
-#  UNIT_PATH: '/etc/systemd/system/{{.UNIT_NAME}}'
+  # Local (off-cluster) backup destination. Survives `task nuke`.
+  BACKUP_DIR: './backups'
 
 tasks:
   default:
@@ -34,7 +32,7 @@ tasks:
       - task: verify:health
 
   down:
-    desc: "Teardown: Delete Namespace"
+    desc: "Teardown: Delete Namespace (DELETES PVCs in the namespace too)"
     cmds:
       - kubectl delete namespace {{.NAMESPACE}} --ignore-not-found
 
@@ -45,19 +43,20 @@ tasks:
       - kubectl get svc -n {{.NAMESPACE}}
 
   nuke:
-    desc: "🔥 DESTRUCTIVE: Delete Namespace and ALL Persistent Volumes"
-    prompt: "This will destroy all memory and logs. Continue?"
+    desc: "🔥 DESTRUCTIVE: Delete this namespace and its Persistent Volumes"
+    prompt: "This will destroy all memory and logs in namespace '{{.NAMESPACE}}'. Continue?"
     cmds:
-      # curl -fsS -X DELETE "$QDRANT_URL/collections/$QDRANT_COLLECTION"
       - |
         kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
           set -eu
           BASE="http://qdrant:6333"
           COL="{{.QDRANT_COLLECTION}}"
-          curl -fsS -X DELETE "$BASE/collections/$COL"
+          curl -fsS -X DELETE "$BASE/collections/$COL" || true
         '
       - task: down
-      - kubectl delete pvc --all --all-namespaces --force --grace-period=0
+      # Scoped to THIS namespace only. The previous --all-namespaces form would
+      # delete every PVC in the entire cluster.
+      - kubectl delete pvc --all -n {{.NAMESPACE}} --ignore-not-found --force --grace-period=0
 
   # ============================================================================
   # 🐳 BUILD
@@ -82,6 +81,7 @@ tasks:
       - kubectl apply -f k8s/
       - kubectl apply -f k8s/vector/
       - kubectl apply -f k8s/grafana/
+      - kubectl apply -f k8s/backup/
 
   k8s:wait:
     desc: "Block until core services are Ready"
@@ -103,42 +103,35 @@ tasks:
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/open-webui
 
   # ============================================================================
-  # 💾 DATA & STATE (INIT)
+  # 💾 DATA & STATE (INIT)  -- non-destructive; safe to re-run
   # ============================================================================
   db:init:
-    desc: "Idempotent DB Init (Postgres Schema + Qdrant Collection)"
-    deps: [db:init-pg, db:init-qdrant]
-
-  db:init-pg:
-    internal: true
+    desc: "Idempotent init: apply pending migrations + ensure Qdrant collection"
     cmds:
-      - |
-        echo "Applying SQL schemas..."
-        cat sql/schema.sql sql/010_telemetry_schema.sql | \
-        kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
-        psql -U homel -d homel -v ON_ERROR_STOP=1
+      - task: migrate:up
+      - task: db:init-qdrant
 
   db:init-qdrant:
     internal: true
     cmds:
       - |
-        echo "Initializing Qdrant..."
+        echo "Ensuring Qdrant collection..."
         kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
           set -eu
           BASE="http://qdrant:6333"
           COL="{{.QDRANT_COLLECTION}}"
 
-          # Create Collection
-          if curl -fsS "$BASE/collections/$COL" >/dev/null; then
-            curl -fsS -X DELETE "$BASE/collections/$COL"
-          fi  
-          
+          # Create ONLY if missing (non-destructive). Use db:reset to rebuild.
+          if curl -fsS "$BASE/collections/$COL" >/dev/null 2>&1; then
+            echo "Collection $COL already exists, skipping create"
+            exit 0
+          fi
+
           curl -fsS -X PUT "$BASE/collections/$COL" \
               -H "Content-Type: application/json" \
               -d "{\"vectors\":{\"dense\":{\"size\":384,\"distance\":\"Cosine\"}},\"sparse_vectors\":{\"lexical\":{\"modifier\":\"idf\"}},\"on_disk_payload\":true}"
           echo "Collection $COL created"
 
-          # Create Payload Indexes
           idx() {
             curl -fsS -X PUT "$BASE/collections/$COL/index?wait=true" \
               -H "Content-Type: application/json" \
@@ -158,11 +151,134 @@ tasks:
           idx ingested_at  datetime
         '
 
+  db:reset:
+    desc: "🔥 DESTRUCTIVE: drop & rebuild Postgres schema + Qdrant collection from scratch"
+    prompt: "This ERASES all Postgres tables and the Qdrant collection. Continue?"
+    cmds:
+      - |
+        echo "Dropping Postgres schema..."
+        kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
+          psql -U homel -d homel -v ON_ERROR_STOP=1 \
+          -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+      - |
+        echo "Dropping Qdrant collection..."
+        kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
+          curl -fsS -X DELETE "http://qdrant:6333/collections/{{.QDRANT_COLLECTION}}" || true
+        '
+      - task: db:init
+
   db:shell:
     desc: "Open generic PSQL shell"
     interactive: true
     cmds:
       - kubectl exec -it -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- psql -U homel -d homel
+
+  # ============================================================================
+  # 🧬 MIGRATIONS  (tracked in schema_migrations; only un-applied files run)
+  # ============================================================================
+  migrate:up:
+    desc: "Apply pending SQL migrations from sql/migrations/"
+    cmds:
+      - NAMESPACE={{.NAMESPACE}} bash scripts/migrate.sh up
+
+  migrate:status:
+    desc: "Show applied vs pending migrations"
+    cmds:
+      - NAMESPACE={{.NAMESPACE}} bash scripts/migrate.sh status
+
+  migrate:verify:
+    desc: "Warn if any applied migration file changed on disk (drift check)"
+    cmds:
+      - NAMESPACE={{.NAMESPACE}} bash scripts/migrate.sh verify
+
+  # ============================================================================
+  # 🗄️ BACKUP  (local, off-cluster -> survives `task nuke`)
+  # ============================================================================
+  backup:
+    desc: "Back up BOTH Postgres and Qdrant to {{.BACKUP_DIR}}"
+    cmds:
+      - task: db:backup
+      - task: qdrant:backup
+
+  db:backup:
+    desc: "Dump Postgres -> {{.BACKUP_DIR}}/pg (custom format)"
+    cmds:
+      - mkdir -p {{.BACKUP_DIR}}/pg
+      - |
+        set -e
+        TS=$(date +%Y%m%d-%H%M%S)
+        OUT="{{.BACKUP_DIR}}/pg/homel-$TS.dump"
+        echo "Dumping -> $OUT"
+        kubectl exec -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
+          pg_dump -U homel -d homel -Fc > "$OUT"
+        echo "✅ $OUT ($(du -h "$OUT" | cut -f1))"
+
+  qdrant:backup:
+    desc: "Snapshot Qdrant -> {{.BACKUP_DIR}}/qdrant"
+    cmds:
+      - mkdir -p {{.BACKUP_DIR}}/qdrant
+      - |
+        set -e
+        kubectl port-forward -n {{.NAMESPACE}} svc/qdrant 16333:6333 >/tmp/qpf.log 2>&1 &
+        PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT
+        sleep 2
+        COL="{{.QDRANT_COLLECTION}}"
+        echo "Creating snapshot..."
+        NAME=$(curl -fsS -X POST "http://localhost:16333/collections/$COL/snapshots" \
+               | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
+        [ -n "$NAME" ] || { echo "snapshot create failed"; exit 1; }
+        OUT="{{.BACKUP_DIR}}/qdrant/$NAME"
+        echo "Downloading -> $OUT"
+        curl -fsS "http://localhost:16333/collections/$COL/snapshots/$NAME" -o "$OUT"
+        echo "✅ $OUT ($(du -h "$OUT" | cut -f1))"
+
+  # ============================================================================
+  # ♻️ RESTORE  (disaster recovery)
+  # ============================================================================
+  restore:
+    desc: "Full DR: restore PG dump -> forward-migrate -> restore Qdrant snapshot. Vars: PG_DUMP=... QDRANT_SNAPSHOT=..."
+    cmds:
+      - task: db:restore
+        vars: { FILE: '{{.PG_DUMP}}' }
+      - task: migrate:up
+      - task: qdrant:restore
+        vars: { SNAPSHOT: '{{.QDRANT_SNAPSHOT}}' }
+      - echo "✅ Full restore complete. Run 'task migrate:status' to confirm schema head."
+
+  db:restore:
+    desc: "Restore Postgres from a dump. Usage: task db:restore FILE=./backups/pg/<f>.dump"
+    vars:
+      FILE: '{{.FILE | default .CLI_ARGS}}'
+    cmds:
+      - |
+        set -e
+        FILE="{{.FILE}}"
+        [ -n "$FILE" ] || { echo "usage: task db:restore FILE=<dumpfile>"; exit 1; }
+        [ -f "$FILE" ] || { echo "no such file: $FILE"; exit 1; }
+        echo "Restoring $FILE -> postgres (drops & recreates objects present in the dump)..."
+        kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
+          pg_restore -U homel -d homel --no-owner --clean --if-exists < "$FILE"
+        echo "✅ Postgres restore complete (schema_migrations now reflects the dump)"
+
+  qdrant:restore:
+    desc: "Restore Qdrant from a snapshot. Usage: task qdrant:restore SNAPSHOT=./backups/qdrant/<f>.snapshot"
+    vars:
+      SNAPSHOT: '{{.SNAPSHOT | default .CLI_ARGS}}'
+    cmds:
+      - |
+        set -e
+        FILE="{{.SNAPSHOT}}"
+        [ -n "$FILE" ] || { echo "usage: task qdrant:restore SNAPSHOT=<file>"; exit 1; }
+        [ -f "$FILE" ] || { echo "no such file: $FILE"; exit 1; }
+        kubectl port-forward -n {{.NAMESPACE}} svc/qdrant 16333:6333 >/tmp/qpf.log 2>&1 &
+        PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT
+        sleep 2
+        COL="{{.QDRANT_COLLECTION}}"
+        echo "Uploading $FILE -> Qdrant (recreates $COL from snapshot)..."
+        curl -fsS -X POST "http://localhost:16333/collections/$COL/snapshots/upload?priority=snapshot" \
+          -F "snapshot=@$FILE"
+        echo ""
+        echo "✅ Qdrant restore complete"
 
   # ============================================================================
   # ✅ VERIFICATION (DOC 08 COMPLIANCE)
@@ -182,11 +298,11 @@ tasks:
           curl -s -X POST http://localhost:8080/v1/chat/completions \
           -H "Content-Type: application/json" \
           -d '{"message": "My project code is 994", "project_id": "test-e2e"}'
-        
+
         echo ""
         echo "Phase 2: Waiting for Async Admission (3s)..."
         sleep 3
-      
+
         echo "Phase 3: Verifying Persistence..."
         kubectl exec -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
           psql -U homel -d homel -t -c "SELECT count(*) FROM dynamic_memory WHERE content LIKE '%994%';" | grep -q "1" && echo "✅ PASS: Memory Persisted" || echo "❌ FAIL: Memory Not Found"
@@ -214,7 +330,7 @@ tasks:
       - |
         IP=$(minikube ip 2>/dev/null || echo "")
         HOST_IP=$(hostname -I | awk '{print $1}')
-        
+
         kubectl run tls-gen --rm -i --restart=Never \
           --env="IP=$IP" \
           --env="HOST_IP=$HOST_IP" \
@@ -227,12 +343,12 @@ tasks:
           echo 'CERT_START' && cat /tmp/tls.crt && echo 'CERT_END'
           echo 'KEY_START' && cat /tmp/tls.key && echo 'KEY_END'
         " > /tmp/tls_output.txt
-        
+
         awk '/CERT_START/{flag=1; next} /CERT_END/{flag=0} flag' /tmp/tls_output.txt > /tmp/tls.crt
         awk '/KEY_START/{flag=1; next} /KEY_END/{flag=0} flag' /tmp/tls_output.txt > /tmp/tls.key
-        
+
         kubectl create secret tls memory-steward-tls --cert=/tmp/tls.crt --key=/tmp/tls.key -n {{.NAMESPACE}} --dry-run=client -o yaml | kubectl apply -f -
-        
+
         rm -f /tmp/tls_output.txt /tmp/tls.crt /tmp/tls.key
       - kubectl apply -f k8s/ingress.yaml
 
