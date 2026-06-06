@@ -1,0 +1,66 @@
+# k8s/vllm-coder.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-coder
+  namespace: ms
+spec:
+  selector:
+    app: vllm-coder
+  ports:
+    - port: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-coder
+  namespace: ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-coder
+  template:
+    metadata:
+      labels:
+        app: vllm-coder
+    spec:
+      volumes:
+        - name: hf-cache
+          persistentVolumeClaim:
+            claimName: hf-cache
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            # Swap this line for whatever size you want (1.5B / 3B / 7B).
+            - Qwen/Qwen2.5-Coder-3B-Instruct-AWQ
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            # Autocomplete needs low latency, not long context — keep it small.
+            - --max-model-len
+            - "8192"
+            # Small model (~2GB AWQ) — give it a slice, not the whole card.
+            - --gpu-memory-utilization
+            - "0.15"
+            - --max-num-seqs
+            - "8"
+          env:
+            - name: HF_HOME
+              value: /root/.cache/huggingface
+            - name: HUGGINGFACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hf-token
+                  key: HF_TOKEN
+            # Shares the steward's card fine. If you only have ONE GPU,
+            # leave this as "1" (same card as steward).
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "1"
+          volumeMounts:
+            - name: hf-cache
+              mountPath: /root/.cache/huggingface
+          ports:
+            - containerPort: 8000
