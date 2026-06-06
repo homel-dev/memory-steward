@@ -4,13 +4,15 @@ version: '3'
 vars:
   NAMESPACE: ms
   QDRANT_COLLECTION: homel_memory
-  # Dynamic variable to get the current Postgres pod name safely
   POSTGRES_POD:
     sh: kubectl get pod -n {{.NAMESPACE}} -l app=postgres -o jsonpath='{.items[0].metadata.name}' || echo ""
   INGRESS_HTTP_PORT: '30080'
   INGRESS_HTTPS_PORT: '30443'
-  # Local (off-cluster) backup destination. Survives `task nuke`.
   BACKUP_DIR: './backups'
+  # Tooling image used by every ephemeral ops Job (migrate/backup/restore/export).
+  # Local minikube default (loaded by `task build`, no registry pull needed).
+  # For GHCR set: ghcr.io/<owner>/<repo>/tooling:latest
+  TOOLING_IMAGE: homel/tooling:dev
 
 tasks:
   default:
@@ -19,7 +21,7 @@ tasks:
       - task --list
 
   # ============================================================================
-  # 🚀 LIFECYCLE (BOOTSTRAP & TEARDOWN)
+  # 🚀 LIFECYCLE
   # ============================================================================
   up:
     desc: "Full Bootstrap: Bootstrap -> Deploy -> Wait -> Init -> Verify"
@@ -46,30 +48,21 @@ tasks:
     desc: "🔥 DESTRUCTIVE: Delete this namespace and its Persistent Volumes"
     prompt: "This will destroy all memory and logs in namespace '{{.NAMESPACE}}'. Continue?"
     cmds:
-      - |
-        kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
-          set -eu
-          BASE="http://qdrant:6333"
-          COL="{{.QDRANT_COLLECTION}}"
-          curl -fsS -X DELETE "$BASE/collections/$COL" || true
-        '
-      - task: down
-      # Scoped to THIS namespace only. The previous --all-namespaces form would
-      # delete every PVC in the entire cluster.
+      - kubectl delete namespace {{.NAMESPACE}} --ignore-not-found
       - kubectl delete pvc --all -n {{.NAMESPACE}} --ignore-not-found --force --grace-period=0
 
   # ============================================================================
   # 🐳 BUILD
   # ============================================================================
   build:
-    desc: "Build Docker images into Minikube registry"
+    desc: "Build images into Minikube (incl. tooling)"
     cmds:
       - minikube image build -t homel/embeddings:dev ./components/embeddings
       - minikube image build -t homel/memory-router:dev ./components/memory_router
       - minikube image build -t homel/memory-steward:dev ./components/memory_steward
       - minikube image build -t homel/memory-steward-mcp:dev ./components/memory_steward_mcp
       - minikube image build -t homel/memory-steward-list:dev ./components/memory_steward_list
-
+      - minikube image build -t homel/tooling:dev -f ./components/tooling/Dockerfile .
 
   # ============================================================================
   # ☸️ KUBERNETES OPERATIONS
@@ -79,22 +72,21 @@ tasks:
     cmds:
       - kubectl apply -f k8s/namespace.yaml
       - kubectl apply -f k8s/
+      - kubectl apply -f k8s/tooling/
+      - kubectl apply -f k8s/backup/
       - kubectl apply -f k8s/vector/
       - kubectl apply -f k8s/grafana/
-      - kubectl apply -f k8s/backup/
 
   k8s:wait:
     desc: "Block until core services are Ready"
     cmds:
-      - echo "Waiting for StatefulSets..."
       - kubectl rollout status -n {{.NAMESPACE}} statefulset/postgres --timeout=120s
       - kubectl rollout status -n {{.NAMESPACE}} statefulset/qdrant --timeout=120s
-      - echo "Waiting for Deployments..."
       - kubectl rollout status -n {{.NAMESPACE}} deployment/memory-router --timeout=120s
       - kubectl rollout status -n {{.NAMESPACE}} deployment/memory-steward --timeout=120s
 
   k8s:restart:
-    desc: "Restart all core services (fast redeploy)"
+    desc: "Restart all core services"
     cmds:
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-router
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward
@@ -103,10 +95,10 @@ tasks:
       - kubectl rollout restart -n {{.NAMESPACE}} deployment/open-webui
 
   # ============================================================================
-  # 💾 DATA & STATE (INIT)  -- non-destructive; safe to re-run
+  # 💾 DATA & STATE (INIT) -- non-destructive
   # ============================================================================
   db:init:
-    desc: "Idempotent init: apply pending migrations + ensure Qdrant collection"
+    desc: "Idempotent init: migrations (tooling Job) + ensure Qdrant collection"
     cmds:
       - task: migrate:up
       - task: db:init-qdrant
@@ -118,198 +110,269 @@ tasks:
         echo "Ensuring Qdrant collection..."
         kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
           set -eu
-          BASE="http://qdrant:6333"
-          COL="{{.QDRANT_COLLECTION}}"
-
-          # Create ONLY if missing (non-destructive). Use db:reset to rebuild.
+          BASE="http://qdrant:6333"; COL="{{.QDRANT_COLLECTION}}"
           if curl -fsS "$BASE/collections/$COL" >/dev/null 2>&1; then
-            echo "Collection $COL already exists, skipping create"
-            exit 0
+            echo "Collection $COL exists, skipping"; exit 0
           fi
-
-          curl -fsS -X PUT "$BASE/collections/$COL" \
-              -H "Content-Type: application/json" \
-              -d "{\"vectors\":{\"dense\":{\"size\":384,\"distance\":\"Cosine\"}},\"sparse_vectors\":{\"lexical\":{\"modifier\":\"idf\"}},\"on_disk_payload\":true}"
+          curl -fsS -X PUT "$BASE/collections/$COL" -H "Content-Type: application/json" \
+            -d "{\"vectors\":{\"dense\":{\"size\":384,\"distance\":\"Cosine\"}},\"sparse_vectors\":{\"lexical\":{\"modifier\":\"idf\"}},\"on_disk_payload\":true}"
           echo "Collection $COL created"
-
-          idx() {
-            curl -fsS -X PUT "$BASE/collections/$COL/index?wait=true" \
-              -H "Content-Type: application/json" \
-              -d "{\"field_name\":\"$1\",\"field_schema\":\"$2\"}" >/dev/null
-            echo "Indexed: $1"
-          }
-
-          idx project_id   keyword
-          idx memory_type  keyword
-          idx scope        keyword
-          idx source       keyword
-          idx product      keyword
-          idx version      keyword
-          idx chunk_id     keyword
-          idx origin_hash  keyword
-          idx confidence   float
-          idx ingested_at  datetime
         '
 
   db:reset:
-    desc: "🔥 DESTRUCTIVE: drop & rebuild Postgres schema + Qdrant collection from scratch"
+    desc: "🔥 DESTRUCTIVE: drop & rebuild Postgres schema + Qdrant collection"
     prompt: "This ERASES all Postgres tables and the Qdrant collection. Continue?"
     cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- psql -U homel -d homel -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
       - |
-        echo "Dropping Postgres schema..."
-        kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
-          psql -U homel -d homel -v ON_ERROR_STOP=1 \
-          -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
-      - |
-        echo "Dropping Qdrant collection..."
         kubectl run -n {{.NAMESPACE}} qdrant-init --rm -i --restart=Never --image=curlimages/curl:8.5.0 -- sh -c '
           curl -fsS -X DELETE "http://qdrant:6333/collections/{{.QDRANT_COLLECTION}}" || true
         '
       - task: db:init
 
   db:shell:
-    desc: "Open generic PSQL shell"
+    desc: "Open PSQL shell"
     interactive: true
     cmds:
       - kubectl exec -it -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- psql -U homel -d homel
 
   # ============================================================================
-  # 🧬 MIGRATIONS  (tracked in schema_migrations; only un-applied files run)
+  # 🧬 MIGRATIONS (ephemeral tooling Job; tracked in schema_migrations)
   # ============================================================================
   migrate:up:
-    desc: "Apply pending SQL migrations from sql/migrations/"
+    desc: "Apply pending migrations via an ephemeral tooling Job"
     cmds:
-      - NAMESPACE={{.NAMESPACE}} bash scripts/migrate.sh up
+      - |
+        set -e
+        kubectl delete job tooling-migrate -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-migrate, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 300
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: migrate
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["bash","/opt/tooling/migrate.sh","up"]
+                  env:
+                    - {name: PGHOST,     value: "postgres"}
+                    - {name: PGUSER,     value: "homel"}
+                    - {name: PGPASSWORD, value: "homel"}
+                    - {name: PGDATABASE, value: "homel"}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-migrate -n {{.NAMESPACE}} --timeout=180s \
+          || { echo "--- logs ---"; kubectl logs job/tooling-migrate -n {{.NAMESPACE}}; exit 1; }
+        kubectl logs job/tooling-migrate -n {{.NAMESPACE}}
 
   migrate:status:
-    desc: "Show applied vs pending migrations"
+    desc: "Show applied vs pending migrations (ephemeral tooling Job)"
     cmds:
-      - NAMESPACE={{.NAMESPACE}} bash scripts/migrate.sh status
-
-  migrate:verify:
-    desc: "Warn if any applied migration file changed on disk (drift check)"
-    cmds:
-      - NAMESPACE={{.NAMESPACE}} bash scripts/migrate.sh verify
+      - |
+        set -e
+        kubectl delete job tooling-migstatus -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-migstatus, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 120
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: migstatus
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["bash","/opt/tooling/migrate.sh","status"]
+                  env:
+                    - {name: PGHOST,     value: "postgres"}
+                    - {name: PGUSER,     value: "homel"}
+                    - {name: PGPASSWORD, value: "homel"}
+                    - {name: PGDATABASE, value: "homel"}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-migstatus -n {{.NAMESPACE}} --timeout=120s >/dev/null
+        kubectl logs job/tooling-migstatus -n {{.NAMESPACE}}
 
   # ============================================================================
-  # 🗄️ BACKUP  (local, off-cluster -> survives `task nuke`)
+  # 🗄️ BACKUP (ephemeral tooling Job -> backups PVC)
   # ============================================================================
   backup:
-    desc: "Back up BOTH Postgres and Qdrant to {{.BACKUP_DIR}}"
+    desc: "Back up Postgres + Qdrant to the backups PVC"
     cmds:
-      - task: db:backup
-      - task: qdrant:backup
-
-  db:backup:
-    desc: "Dump Postgres -> {{.BACKUP_DIR}}/pg (custom format)"
-    cmds:
-      - mkdir -p {{.BACKUP_DIR}}/pg
       - |
         set -e
-        TS=$(date +%Y%m%d-%H%M%S)
-        OUT="{{.BACKUP_DIR}}/pg/homel-$TS.dump"
-        echo "Dumping -> $OUT"
-        kubectl exec -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
-          pg_dump -U homel -d homel -Fc > "$OUT"
-        echo "✅ $OUT ($(du -h "$OUT" | cut -f1))"
-
-  qdrant:backup:
-    desc: "Snapshot Qdrant -> {{.BACKUP_DIR}}/qdrant"
-    cmds:
-      - mkdir -p {{.BACKUP_DIR}}/qdrant
-      - |
-        set -e
-        kubectl port-forward -n {{.NAMESPACE}} svc/qdrant 16333:6333 >/tmp/qpf.log 2>&1 &
-        PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT
-        sleep 2
-        COL="{{.QDRANT_COLLECTION}}"
-        echo "Creating snapshot..."
-        NAME=$(curl -fsS -X POST "http://localhost:16333/collections/$COL/snapshots" \
-               | sed -n 's/.*"name":"\([^"]*\)".*/\1/p')
-        [ -n "$NAME" ] || { echo "snapshot create failed"; exit 1; }
-        OUT="{{.BACKUP_DIR}}/qdrant/$NAME"
-        echo "Downloading -> $OUT"
-        curl -fsS "http://localhost:16333/collections/$COL/snapshots/$NAME" -o "$OUT"
-        echo "✅ $OUT ($(du -h "$OUT" | cut -f1))"
+        kubectl delete job tooling-backup -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-backup, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 600
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: backup
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["bash","/opt/tooling/backup.sh"]
+                  env:
+                    - {name: PGHOST,            value: "postgres"}
+                    - {name: PGUSER,            value: "homel"}
+                    - {name: PGPASSWORD,        value: "homel"}
+                    - {name: PGDATABASE,        value: "homel"}
+                    - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                    - {name: QDRANT_COLLECTION, value: "{{.QDRANT_COLLECTION}}"}
+                  volumeMounts: [{name: backups, mountPath: /backups}]
+              volumes:
+                - name: backups
+                  persistentVolumeClaim: {claimName: backups}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-backup -n {{.NAMESPACE}} --timeout=600s \
+          || { kubectl logs job/tooling-backup -n {{.NAMESPACE}}; exit 1; }
+        kubectl logs job/tooling-backup -n {{.NAMESPACE}}
 
   # ============================================================================
-  # ♻️ RESTORE  (disaster recovery)
+  # ♻️ RESTORE (ephemeral tooling Job from backups PVC, then forward-migrate)
   # ============================================================================
   restore:
-    desc: "Full DR: restore PG dump -> forward-migrate -> restore Qdrant snapshot. Vars: PG_DUMP=... QDRANT_SNAPSHOT=..."
+    desc: "DR restore. Usage: task restore DUMP=<f.dump> [SNAPSHOT=<f.snapshot>]"
     cmds:
-      - task: db:restore
-        vars: { FILE: '{{.PG_DUMP}}' }
+      - |
+        set -e
+        [ -n "{{.DUMP}}" ] || { echo "usage: task restore DUMP=<pgfile.dump> [SNAPSHOT=<file.snapshot>]"; exit 1; }
+        kubectl delete job tooling-restore -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-restore, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 600
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: restore
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["bash","/opt/tooling/restore.sh"]
+                  env:
+                    - {name: PGHOST,            value: "postgres"}
+                    - {name: PGUSER,            value: "homel"}
+                    - {name: PGPASSWORD,        value: "homel"}
+                    - {name: PGDATABASE,        value: "homel"}
+                    - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                    - {name: QDRANT_COLLECTION, value: "{{.QDRANT_COLLECTION}}"}
+                    - {name: DUMP_FILE,         value: "{{.DUMP}}"}
+                    - {name: SNAPSHOT_FILE,     value: "{{.SNAPSHOT}}"}
+                  volumeMounts: [{name: backups, mountPath: /backups}]
+              volumes:
+                - name: backups
+                  persistentVolumeClaim: {claimName: backups}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-restore -n {{.NAMESPACE}} --timeout=600s \
+          || { kubectl logs job/tooling-restore -n {{.NAMESPACE}}; exit 1; }
+        kubectl logs job/tooling-restore -n {{.NAMESPACE}}
       - task: migrate:up
-      - task: qdrant:restore
-        vars: { SNAPSHOT: '{{.QDRANT_SNAPSHOT}}' }
-      - echo "✅ Full restore complete. Run 'task migrate:status' to confirm schema head."
-
-  db:restore:
-    desc: "Restore Postgres from a dump. Usage: task db:restore FILE=./backups/pg/<f>.dump"
-    vars:
-      FILE: '{{.FILE | default .CLI_ARGS}}'
-    cmds:
-      - |
-        set -e
-        FILE="{{.FILE}}"
-        [ -n "$FILE" ] || { echo "usage: task db:restore FILE=<dumpfile>"; exit 1; }
-        [ -f "$FILE" ] || { echo "no such file: $FILE"; exit 1; }
-        echo "Restoring $FILE -> postgres (drops & recreates objects present in the dump)..."
-        kubectl exec -i -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
-          pg_restore -U homel -d homel --no-owner --clean --if-exists < "$FILE"
-        echo "✅ Postgres restore complete (schema_migrations now reflects the dump)"
-
-  qdrant:restore:
-    desc: "Restore Qdrant from a snapshot. Usage: task qdrant:restore SNAPSHOT=./backups/qdrant/<f>.snapshot"
-    vars:
-      SNAPSHOT: '{{.SNAPSHOT | default .CLI_ARGS}}'
-    cmds:
-      - |
-        set -e
-        FILE="{{.SNAPSHOT}}"
-        [ -n "$FILE" ] || { echo "usage: task qdrant:restore SNAPSHOT=<file>"; exit 1; }
-        [ -f "$FILE" ] || { echo "no such file: $FILE"; exit 1; }
-        kubectl port-forward -n {{.NAMESPACE}} svc/qdrant 16333:6333 >/tmp/qpf.log 2>&1 &
-        PF=$!; trap 'kill $PF 2>/dev/null || true' EXIT
-        sleep 2
-        COL="{{.QDRANT_COLLECTION}}"
-        echo "Uploading $FILE -> Qdrant (recreates $COL from snapshot)..."
-        curl -fsS -X POST "http://localhost:16333/collections/$COL/snapshots/upload?priority=snapshot" \
-          -F "snapshot=@$FILE"
-        echo ""
-        echo "✅ Qdrant restore complete"
+      - echo "✅ Restore + forward-migrate complete. Run 'task migrate:status' to confirm head."
 
   # ============================================================================
-  # ✅ VERIFICATION (DOC 08 COMPLIANCE)
+  # 📤 EXPORT (ephemeral tooling Job -> backups PVC + stdout)
+  # ============================================================================
+  export:memory:
+    desc: "Export memory dataset. e.g. task export:memory -- --level rich --since 30"
+    cmds:
+      - |
+        set -e
+        ARGS="{{.CLI_ARGS}}"; [ -n "$ARGS" ] || ARGS="--level standard"
+        kubectl delete job tooling-export -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-export, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 600
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: export
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["sh","-c","mkdir -p /backups/exports && python3 /opt/tooling/memory_export.py $ARGS | tee /backups/exports/memory-\$(date +%Y%m%d-%H%M%S).json"]
+                  env:
+                    - {name: POSTGRES_USER,     value: "homel"}
+                    - {name: POSTGRES_PASSWORD, value: "homel"}
+                    - {name: POSTGRES_DB,       value: "homel"}
+                    - {name: EXPORT_PG_HOST,    value: "postgres"}
+                    - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                    - {name: QDRANT_COLLECTION, value: "{{.QDRANT_COLLECTION}}"}
+                  volumeMounts: [{name: backups, mountPath: /backups}]
+              volumes:
+                - name: backups
+                  persistentVolumeClaim: {claimName: backups}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-export -n {{.NAMESPACE}} --timeout=600s \
+          || { kubectl logs job/tooling-export -n {{.NAMESPACE}}; exit 1; }
+        echo "✅ Export written to backups PVC at /backups/exports/. Pull locally with: task export:fetch"
+
+  export:fetch:
+    desc: "Copy the newest export from the backups PVC to {{.BACKUP_DIR}}/exports locally"
+    cmds:
+      - |
+        set -e
+        mkdir -p {{.BACKUP_DIR}}/exports
+        kubectl delete job tooling-fetch -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-fetch, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 120
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: fetch
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: IfNotPresent
+                  command: ["sh","-c","cat \$(ls -1t /backups/exports/*.json | head -1)"]
+                  volumeMounts: [{name: backups, mountPath: /backups}]
+              volumes:
+                - name: backups
+                  persistentVolumeClaim: {claimName: backups}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-fetch -n {{.NAMESPACE}} --timeout=120s >/dev/null
+        OUT="{{.BACKUP_DIR}}/exports/memory-export-$(date +%Y%m%d-%H%M%S).json"
+        kubectl logs job/tooling-fetch -n {{.NAMESPACE}} > "$OUT"
+        echo "✅ $OUT"
+
+  # ============================================================================
+  # ✅ VERIFICATION
   # ============================================================================
   verify:health:
-    desc: "Check healthz endpoints for all services"
+    desc: "Check healthz endpoints"
     cmds:
-      - echo "Checking Router..." && kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://localhost:8080/healthz
-      - echo "Checking Steward..." && kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://memory-steward:8090/healthz
+      - kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://localhost:8080/healthz
+      - kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://memory-steward:8090/healthz
 
-  verify:flow:
-    desc: "Run E2E Memory Test (Phase 1-3 from Doc 8)"
-    cmds:
-      - |
-        echo "Phase 1: Chat Request..."
-        kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- \
-          curl -s -X POST http://localhost:8080/v1/chat/completions \
-          -H "Content-Type: application/json" \
-          -d '{"message": "My project code is 994", "project_id": "test-e2e"}'
-
-        echo ""
-        echo "Phase 2: Waiting for Async Admission (3s)..."
-        sleep 3
-
-        echo "Phase 3: Verifying Persistence..."
-        kubectl exec -n {{.NAMESPACE}} {{.POSTGRES_POD}} -- \
-          psql -U homel -d homel -t -c "SELECT count(*) FROM dynamic_memory WHERE content LIKE '%994%';" | grep -q "1" && echo "✅ PASS: Memory Persisted" || echo "❌ FAIL: Memory Not Found"
-
-  # ============================================================================
-  # 🛠️ DEVELOPER UTILITIES
-  # ============================================================================
   logs:router:
     desc: "Tail Router Logs"
     cmds:
@@ -319,66 +382,3 @@ tasks:
     desc: "Tail Steward Logs"
     cmds:
       - kubectl logs -n {{.NAMESPACE}} -l app=memory-steward -f
-
-  # ============================================================================
-  # 🌐 INGRESS ROUTING
-  # ============================================================================
-  ingress:setup:
-    desc: "Bootstrap Ingress, generate in-cluster TLS cert, and apply routing"
-    cmds:
-      - minikube addons enable ingress
-      - |
-        IP=$(minikube ip 2>/dev/null || echo "")
-        HOST_IP=$(hostname -I | awk '{print $1}')
-
-        kubectl run tls-gen --rm -i --restart=Never \
-          --env="IP=$IP" \
-          --env="HOST_IP=$HOST_IP" \
-          --image=alpine:3.19 -- sh -c "
-          apk add --no-cache openssl >/dev/null 2>&1
-          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout /tmp/tls.key -out /tmp/tls.crt \
-            -subj '/CN=srv100' \
-            -addext \"subjectAltName = IP:\$IP,IP:\$HOST_IP,DNS:localhost,DNS:srv100\" >/dev/null 2>&1
-          echo 'CERT_START' && cat /tmp/tls.crt && echo 'CERT_END'
-          echo 'KEY_START' && cat /tmp/tls.key && echo 'KEY_END'
-        " > /tmp/tls_output.txt
-
-        awk '/CERT_START/{flag=1; next} /CERT_END/{flag=0} flag' /tmp/tls_output.txt > /tmp/tls.crt
-        awk '/KEY_START/{flag=1; next} /KEY_END/{flag=0} flag' /tmp/tls_output.txt > /tmp/tls.key
-
-        kubectl create secret tls memory-steward-tls --cert=/tmp/tls.crt --key=/tmp/tls.key -n {{.NAMESPACE}} --dry-run=client -o yaml | kubectl apply -f -
-
-        rm -f /tmp/tls_output.txt /tmp/tls.crt /tmp/tls.key
-      - kubectl apply -f k8s/ingress.yaml
-
-  ingress:export-cert:
-    desc: "Export public certificate for physical client trust store"
-    cmds:
-      - kubectl get secret memory-steward-tls -n {{.NAMESPACE}} -o jsonpath="{.data['tls\.crt']}" | base64 -d > srv100_public.crt
-      - echo "✅ Saved srv100_public.crt"
-      - echo "Action Required - Import this file into your client OS/Chrome Trusted Root Certification Authorities"
-
-  ingress:forward:
-    desc: "Expose Ingress controller to 0.0.0.0 on ports {{.INGRESS_HTTP_PORT}}/{{.INGRESS_HTTPS_PORT}} (Background)"
-    cmds:
-      - |
-        if pgrep -f "kubectl port-forward -n ingress-nginx services/ingress-nginx-controller" > /dev/null; then
-          echo "Port-forward is already running."
-        else
-          nohup kubectl port-forward -n ingress-nginx services/ingress-nginx-controller --address 0.0.0.0 {{.INGRESS_HTTP_PORT}}:80 {{.INGRESS_HTTPS_PORT}}:443 > /tmp/ingress-forward.log 2>&1 &
-          echo $! > /tmp/ingress-forward.pid
-          echo "✅ Port-forward running in background on ports {{.INGRESS_HTTP_PORT}} and {{.INGRESS_HTTPS_PORT}} (PID: $(cat /tmp/ingress-forward.pid))"
-          echo "Logs available at: /tmp/ingress-forward.log"
-        fi
-
-  ingress:unforward:
-    desc: "Stop the background Ingress port-forward"
-    cmds:
-      - |
-        if [ -f /tmp/ingress-forward.pid ]; then
-          kill $(cat /tmp/ingress-forward.pid) 2>/dev/null || true
-          rm /tmp/ingress-forward.pid
-        fi
-        pkill -f "kubectl port-forward -n ingress-nginx" || true
-        echo "🛑 Port-forward stopped."
