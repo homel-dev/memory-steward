@@ -1,4 +1,4 @@
-<img src="docs/img/logo.jpeg" width="100">
+<img src="docs/img/logo2.jpeg" width="100">
 
 # MEMORY STEWARD
 ## A Deterministic Cognitive Control Plane for LLM Systems
