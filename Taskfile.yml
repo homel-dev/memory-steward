@@ -12,7 +12,7 @@ vars:
   # Tooling image used by every ephemeral ops Job (migrate/backup/restore/export).
   # Local minikube default (loaded by `task build`, no registry pull needed).
   # For GHCR set: ghcr.io/<owner>/<repo>/tooling:latest
-  TOOLING_IMAGE: homel/tooling:dev
+  TOOLING_IMAGE: ghcr.io/homel-dev/memory-steward/tooling:latest
 
 tasks:
   default:
