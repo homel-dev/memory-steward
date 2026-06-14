@@ -7,10 +7,11 @@ Config changes are persisted to Postgres (runtime_config table) so the
 router and steward can pick them up on their next config reload cycle.
 """
 
-import os
 import logging
+
 import psycopg
 from fastmcp import FastMCP
+
 from memory_steward_mcp.config import POSTGRES_DSN
 
 log = logging.getLogger("memory-steward-mcp.stability")

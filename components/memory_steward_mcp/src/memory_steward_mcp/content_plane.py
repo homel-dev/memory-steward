@@ -11,20 +11,19 @@ Key invariants (Doc 03):
 - embed_fn calls POST /embed with {"texts": [...]} (not bare /embed with {"text": ...}).
 """
 
+import hashlib
+import logging
 import re
 import time
 import uuid
-import hashlib
-import logging
-import requests
-from typing import Optional
 
 import psycopg
-from qdrant_client import QdrantClient
-from qdrant_client.http.models import PointStruct, Filter, FieldCondition, MatchValue
+import requests
 from fastmcp import FastMCP
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import FieldCondition, Filter, MatchValue, PointStruct
 
-from memory_steward_mcp.config import QDRANT_COLLECTION, POSTGRES_DSN, EMBEDDINGS_URL
+from memory_steward_mcp.config import EMBEDDINGS_URL, POSTGRES_DSN, QDRANT_COLLECTION
 
 log = logging.getLogger("memory-steward-mcp.content")
 
@@ -305,7 +304,7 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         """[Reference] Inspect stored chunks for a specific product/version.
         Optionally filter by section name substring."""
         try:
-            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.http.models import FieldCondition, Filter, MatchValue
             must = [
                 FieldCondition(key="memory_type", match=MatchValue(value="reference_memory")),
                 FieldCondition(key="product", match=MatchValue(value=product)),

@@ -1,27 +1,26 @@
 # components/memory_router/src/memory_router/server.py
 
-import os
-import json
 import hashlib
+import json
+import logging
+import os
 import threading
 import time
-import logging
 import uuid
-from typing import Any, Dict, List, Optional, Tuple, Union
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-
 import psycopg
 import requests
 import tiktoken
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sklearn.metrics.pairwise import cosine_similarity
 
-from memory_router.telemetry import TelemetryWriter
 from memory_router.mcp_bridge import handle_glap
+from memory_router.telemetry import TelemetryWriter
 
 # ------------------------------------------------------------------------------
 # Configuration

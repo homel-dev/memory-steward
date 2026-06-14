@@ -5,15 +5,23 @@ Diagnostics Plane: health, explain, metrics, Qdrant visibility, memory audit.
 Implements the full Doc 06 Section 5.3 blame trace and adds genuine observability.
 """
 
-import os
 import json
 import logging
+import os
+
 import psycopg
 import requests
 from fastmcp import FastMCP
+
 from memory_steward_mcp.config import (
-    POSTGRES_DSN, LOG_DIR, QDRANT_URL, MAX_CONTEXT_TOKENS,
-    HYSTERESIS_WINDOW, APP_VERSION, QDRANT_COLLECTION, EMBEDDINGS_URL
+    APP_VERSION,
+    EMBEDDINGS_URL,
+    HYSTERESIS_WINDOW,
+    LOG_DIR,
+    MAX_CONTEXT_TOKENS,
+    POSTGRES_DSN,
+    QDRANT_COLLECTION,
+    QDRANT_URL,
 )
 
 log = logging.getLogger("memory-steward-mcp.diagnostics")
@@ -322,7 +330,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
             return f"Qdrant error: {e}"
 
         try:
-            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.http.models import FieldCondition, Filter, MatchValue
 
             def count_by_type(memory_type: str) -> int:
                 res = qdrant.count(
@@ -420,7 +428,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
             return f"Embedding failed: {e}"
 
         try:
-            from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.http.models import FieldCondition, Filter, MatchValue
             results = qdrant.search(
                 collection_name=QDRANT_COLLECTION,
                 query_vector=("dense", vec),
@@ -437,7 +445,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
             return f"No candidates found for project_id={project_id} — retrieval blind spot."
 
         lines = [
-            f"## Simulated Retrieval",
+            "## Simulated Retrieval",
             f"- project={project_id}  query=`{query}`  top_k={top_k}",
             "",
         ]

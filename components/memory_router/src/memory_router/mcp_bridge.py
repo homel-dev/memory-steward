@@ -18,14 +18,14 @@
 #         /glap <cmd> <value>           -> bare positional, ONLY for single-required-arg tools
 #   * No internal validation error or stack trace is ever surfaced to chat.
 
-import os
-import re
+import asyncio
 import json
 import logging
-import asyncio
+import os
+import re
 import time
 import uuid
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastmcp import Client as MCPClient
 

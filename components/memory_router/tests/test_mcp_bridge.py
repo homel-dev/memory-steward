@@ -14,19 +14,33 @@ Covers:
 
 External deps (fastmcp) are stubbed; a configurable fake MCP client is injected.
 """
+import importlib.util
+import pathlib
 import sys
 import types
-import asyncio
+
 import pytest
 
-# --- stub fastmcp so the real bridge imports without the package installed ----
-_fastmcp = types.ModuleType("fastmcp")
-_fastmcp.Client = object  # placeholder; tests inject their own via MCPClient
-sys.modules.setdefault("fastmcp", _fastmcp)
+# fastmcp may not be importable in the router test venv; stub it only if absent.
+if "fastmcp" not in sys.modules:
+    try:
+        import fastmcp  # noqa: F401
+    except Exception:
+        _stub = types.ModuleType("fastmcp")
+        _stub.Client = object
+        sys.modules["fastmcp"] = _stub
 
-import importlib  # noqa: E402
-
-b = importlib.import_module("memory_router.mcp_bridge")
+# Load the REAL bridge directly from its file. test_integration.py and
+# test_router_unit.py replace sys.modules["memory_router.mcp_bridge"] with a
+# MagicMock at import time; loading by path under a private name sidesteps that
+# pollution entirely so we exercise the actual implementation.
+_BRIDGE_PATH = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "src" / "memory_router" / "mcp_bridge.py"
+)
+_spec = importlib.util.spec_from_file_location("_real_mcp_bridge", _BRIDGE_PATH)
+b = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(b)
 
 
 # ---------------------------------------------------------------------------
