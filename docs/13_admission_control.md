@@ -274,7 +274,7 @@ On every context assembly, the Router MAY emit a structured diff describing how 
 ### 7.3 Rules
 
 - The Context Diff is a **Diagnostics Plane** artifact. It is **pull-only** and MUST NOT be injected into the Builder prompt (preserves Document 06 telemetry invariant).
-- It plugs into the existing Glass Pane `explain_decision` surface (Document 07) and answers: “Why am I seeing this context now?”
+- It plugs into the existing Glass Pane `diag_explain` surface (Document 07) and answers: “Why am I seeing this context now?”
 - `why` fields MUST use bounded reason codes, not raw content.
 
 [Back to top](#navigation)

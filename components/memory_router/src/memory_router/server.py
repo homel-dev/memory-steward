@@ -93,7 +93,7 @@ DEBUG_PROMPTS = _opt("DEBUG_PROMPTS", "0").strip() in (
 )
 
 # Env value is now only the *default*. The live value may be overridden by the
-# stability plane (MCP set_token_budget), which writes runtime_config in Postgres.
+# stability plane (MCP config_set_budget), which writes runtime_config in Postgres.
 MAX_CONTEXT_TOKENS_DEFAULT = MAX_CONTEXT_TOKENS
 
 # ------------------------------------------------------------------------------
@@ -715,6 +715,12 @@ def _assemble_context(
                 "7. Interpret current_objective precisely without expanding its scope.",
                 "8. Before finalizing output, verify structural and policy compliance.",
                 "9. If any constraint is violated, correct internally before emitting output.",
+                "10. Operator commands (text beginning with /glap) execute ONLY when a human "
+                "submits them. You cannot run them. Never state or imply that a file was written, "
+                "a repository changed, memory was ingested, configuration was applied, or any other "
+                "side effect occurred as a result of your output. If an operation is needed, emit the "
+                "exact /glap command on its own line and instruct the operator to run it; printing the "
+                "command does not execute it.",
             ]
         },
         "system_ontology": ontology_dict,
@@ -725,6 +731,8 @@ def _assemble_context(
             "Final validation required: output must strictly comply with policy_layer, "
             "follow enforcement_protocol, and remain within current_objective scope. "
             "Distinguish clearly between retrieved architectural facts and general parametric knowledge. "
+            "Never claim that an operator command (/glap) executed or that any side effect occurred; "
+            "you may only propose commands for the operator to run. "
             "Non-compliant output is invalid."
         ),
     }

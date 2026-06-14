@@ -139,10 +139,10 @@ sequenceDiagram
 1. **`ingest_reference`**
 - **Action:** Force-feed documentation chunks.
 - **Target:** Qdrant (Reference Memory).
-1. **`set_token_budget`**
+1. **`config_set_budget`**
 - **Action:** Tune retrieval density on the fly.
 - **Target:** Runtime Config.
-1. **`explain_decision`**
+1. **`diag_explain`**
 - **Action:** Debug “Why did the system say that?”
 - **Target:** Postgres Telemetry Tables.
 

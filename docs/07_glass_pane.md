@@ -69,7 +69,7 @@ It is a **Tool Set** exposed to the Host LLM (Open WebUI).
 Management actions are performed via **Natural Language Commands** in the chat interface.
 
 - **Input:** “Why did you ignore the Terraform docs?”
-- **Action:** System calls `explain_last_decision()`.
+- **Action:** System calls `diag_explain_last()`.
 - **Output:** System renders the telemetry trace directly in the chat.
 
 This unifies **Execution** (The Chat) with **Administration** (The Dashboard).
@@ -92,7 +92,7 @@ The Control Plane components defined in Documents 01–06 map to MCP primitives 
 |**Reference Data**|**Resource** |`ref://{namespace}/{doc_id}`|Direct inspection of chunked knowledge.                  |
 |**Telemetry**     |**Resource** |`telemetry://logs/recent`   |Pull-only observability logs.                            |
 |**Ingestion**     |**Tool**     |`ingest_reference(...)`     |Active fetching and indexing of documentation.           |
-|**Configuration** |**Tool**     |`set_token_budget(...)`     |Runtime tuning of stability parameters.                  |
+|**Configuration** |**Tool**     |`config_set_budget(...)`     |Runtime tuning of stability parameters.                  |
 |**Mode Logic**    |**Prompt**   |`mode_selection`            |Standardized templates for Steward intent classification.|
 
 ### 3.2 Topology
@@ -128,8 +128,8 @@ Tools to manipulate what the system “knows.”
 |:-----------------|:--------------------------|:----------------------------------------------------------------|
 |`ingest_reference`|`url`, `product`, `version`|Scrapes, validates, and indexes new documentation.               |
 |`inspect_memory`  |`query`, `namespace`       |Debug tool to perform raw vector search and see retrieved chunks.|
-|`update_static`   |`layer`, `content`         |Overwrites `static_global` or `static_mode_conditioned` text.    |
-|`purge_reference` |`namespace`                |**Destructive.** Removes a specific versioned knowledge base.    |
+|`static_update`   |`layer`, `content`         |Overwrites `static_global` or `static_mode_conditioned` text.    |
+|`ref_purge` |`namespace`                |**Destructive.** Removes a specific versioned knowledge base.    |
 
 ### 4.2 Stability Plane Tools (Configuration)
 
@@ -137,9 +137,9 @@ Tools to tune how the system behaves.
 
 |Tool Name             |Parameters    |Description                                                                  |
 |:---------------------|:-------------|:----------------------------------------------------------------------------|
-|`set_token_budget`    |`max_tokens`  |Adjusts `context_budget_max` (e.g., raise for GPT-4, lower for local models).|
-|`force_mode`          |`mode`, `lock`|Overrides the Steward’s classifier (e.g., lock to `engineering`).            |
-|`configure_hysteresis`|`decay_rate`  |Tunes the “stickiness” of operational modes.                                 |
+|`config_set_budget`    |`max_tokens`  |Adjusts `context_budget_max` (e.g., raise for GPT-4, lower for local models).|
+|`config_force_mode`          |`mode`, `lock`|Overrides the Steward’s classifier (e.g., lock to `engineering`).            |
+|`config_set_hysteresis`|`decay_rate`  |Tunes the “stickiness” of operational modes.                                 |
 
 ### 4.3 Diagnostics Plane Tools (Observability)
 
@@ -147,9 +147,9 @@ Tools to inspect system health and decisions.
 
 |Tool Name          |Parameters             |Description                                                               |
 |:------------------|:----------------------|:-------------------------------------------------------------------------|
-|`get_system_health`|*none*                 |Returns connectivity status of Vector DB, Postgres, and Embedding service.|
+|`diag_health`|*none*                 |Returns connectivity status of Vector DB, Postgres, and Embedding service.|
 |`get_recent_logs`  |`minutes`              |Shows recent error rates and latency spikes.                              |
-|`explain_decision` |`request_id` (optional)|Returns the “Blame Trace” for the last request (dropped reasons, scores). |
+|`diag_explain` |`request_id` (optional)|Returns the “Blame Trace” for the last request (dropped reasons, scores). |
 
 [Back to top](#navigation)
 
@@ -176,7 +176,7 @@ The Glass Pane enforces **High-Grade** rigor without manual toil via “Assisted
 **Goal:** Diagnose hallucination or retrieval failure instantly.
 
 1. **Trigger:** User asks *“Why did you miss the firewall rule?”*
-1. **Execution:** Agent calls `explain_decision()`.
+1. **Execution:** Agent calls `diag_explain()`.
 1. **Result:**
 
 > “I dropped the firewall chunk because:
@@ -220,7 +220,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("Steward-GlassPane")
 
 @mcp.tool()
-async def explain_decision() -> str:
+async def diag_explain() -> str:
     """Explains why specific memories were included or dropped."""
     # Connects to Telemetry Plane [Doc 06]
     return telemetry_service.get_last_blame()
@@ -240,7 +240,7 @@ async def ingest_reference(url: str, product: str) -> str:
 ## 8. Hard Invariants
 
 > **Hard Invariant:** **No Implicit Writes:** The system never ingests memory without explicit tool invocation and confirmation.
-> **Hard Invariant:** **Pull-Only Diagnostics:** Telemetry is never injected into the prompt context unless explicitly requested via `explain_decision`.
+> **Hard Invariant:** **Pull-Only Diagnostics:** Telemetry is never injected into the prompt context unless explicitly requested via `diag_explain`.
 > **Hard Invariant:** **Identity Isolation:** The Management Interface uses a distinct `client_id` in telemetry to distinguish Ops actions from User chats.
 > **Hard Invariant:** **Atomic Config:** Configuration changes (e.g., Budget) take effect immediately for the next request.
 
@@ -272,7 +272,7 @@ By leveraging MCP and ChatOps, it achieves **High-Grade** manageability (audit t
 The Glass Pane provides operator-grade access to system logs via MCP tools.
 Interfaces are **read-only**, time-bounded, and designed for rapid triage and explainability.
 
-### 11.1 Tool: `diagnostics.logs.read`
+### 11.1 Tool: `diag_logs`
 
 **Parameters**
 
@@ -324,7 +324,7 @@ Heuristic health scoring from recent logs and telemetry.
 
 ### 11.5 Operator UX (Open WebUI)
 
-- Glass Pane tools are accessible via the `/glap` slash-command interface in Open WebUI. Commands are auto-seeded on first use by the Memory Router (see `mcp_bridge.py`). Operators interact using natural language — e.g. `/glap get_metrics` or `/glap explain_last_decision`. Operators can refine log queries with `grep`, `since`, `until` parameters.
+- Glass Pane tools are accessible via the `/glap` slash-command interface in Open WebUI. Commands are auto-seeded on first use by the Memory Router (see `mcp_bridge.py`). Operators interact using natural language — e.g. `/glap diag_metrics` or `/glap diag_explain_last`. Operators can refine log queries with `grep`, `since`, `until` parameters.
 
 [Back to top](#navigation)
 

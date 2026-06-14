@@ -160,9 +160,9 @@ graph TD
 
     subgraph "The Glass Pane - MCP Server"
         MCP[steward-mcp]
-        T1[Tool: ingest_reference_url]
-        T2[Tool: set_token_budget]
-        T3[Tool: explain_decision]
+        T1[Tool: ref_ingest_url]
+        T2[Tool: config_set_budget]
+        T3[Tool: diag_explain]
         R1[mem://static/global]
         R2[telemetry://logs/recent]
     end

@@ -25,7 +25,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # HEALTH
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="diag_health")
     def get_system_health() -> str:
         """[Diagnostics] Connectivity and liveness check for all services."""
         health = {}
@@ -82,7 +82,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # FULL BLAME TRACE (Doc 06 Section 5.3)
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="diag_explain")
     def explain_decision(request_id: str) -> str:
         """[Diagnostics] Full Doc 06 blame trace for a specific request_id.
         Shows token accounting, retrieval drops, step latencies, and admission outcome."""
@@ -179,7 +179,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
 
         return "\n".join(line for line in lines if line is not None)
 
-    @mcp.tool()
+    @mcp.tool(name="diag_explain_last")
     def explain_last_decision() -> str:
         """[Diagnostics] Full blame trace for the most recent request."""
         try:
@@ -196,7 +196,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # PERFORMANCE METRICS SUMMARY
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="diag_metrics")
     def get_metrics(window_minutes: int = 60, project_id: str = None) -> str:
         """[Diagnostics] Request throughput, latency p95, error rate, token economy,
         retrieval blind-spot rate, and admission health over a time window."""
@@ -312,7 +312,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # QDRANT COLLECTION VISIBILITY
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="diag_qdrant_stats")
     def get_qdrant_stats() -> str:
         """[Diagnostics] Qdrant collection health: point counts by memory type,
         index status, and collection config."""
@@ -361,9 +361,9 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # DYNAMIC MEMORY AUDIT (per project)
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="dyn_inspect")
     def get_project_memory(project_id: str, limit: int = 50, high_confidence_only: bool = False) -> str:
-        """[Diagnostics] Show everything remembered about a project from Postgres.
+        """[Dynamic Memory] Show everything remembered about a project from Postgres.
         Ordered by recency. Use high_confidence_only=true to filter noise."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
@@ -404,9 +404,9 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # RETRIEVAL SIMULATION
     # ------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="dyn_simulate_retrieval")
     def simulate_retrieval(project_id: str, query: str, top_k: int = 8) -> str:
-        """[Diagnostics] Simulate what the router would retrieve for a given query
+        """[Dynamic Memory] Simulate what the router would retrieve for a given query
         and project. Shows ranked candidates without touching memory or telemetry."""
         try:
             r = requests.post(
@@ -453,7 +453,7 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
     # LOGS
     # ------------------------------------------------------------------
 
-    @mcp.tool(name="diagnostics.logs.read")
+    @mcp.tool(name="diag_logs")
     def logs_read(service: str, lines: int = 200) -> str:
         """[Diagnostics] Read bounded tail of container logs for a service.
         Valid services: memory-router, memory-steward, memory-steward-mcp,

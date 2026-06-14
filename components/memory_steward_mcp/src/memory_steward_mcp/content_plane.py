@@ -210,14 +210,14 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
     # REFERENCE MEMORY: URL INGESTION
     # -----------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="ref_ingest_url")
     def ingest_reference_url(
         url: str,
         product: str,
         version: str,
         scope: str = "general",
     ) -> str:
-        """[Content Plane] Fetch a URL and ingest it as chunked reference memory.
+        """[Reference] Fetch a URL and ingest it as chunked reference memory.
         Chunks deterministically by H2 section. Idempotent — safe to re-run.
 
         Examples:
@@ -239,7 +239,7 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
             source_url=url,
         )
 
-    @mcp.tool()
+    @mcp.tool(name="ref_ingest_text")
     def ingest_reference_text(
         content: str,
         product: str,
@@ -247,7 +247,7 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         scope: str = "general",
         source_url: str = "manual",
     ) -> str:
-        """[Content Plane] Ingest raw markdown/text as chunked reference memory.
+        """[Reference] Ingest raw markdown/text as chunked reference memory.
         Use this when you have the documentation text directly (e.g. pasted content,
         file contents, or the Memory Steward docs themselves).
 
@@ -266,9 +266,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
     # REFERENCE MEMORY: INSPECTION & MANAGEMENT
     # -----------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="ref_list")
     def list_reference_namespaces() -> str:
-        """[Content Plane] List all ingested reference memory namespaces
+        """[Reference] List all ingested reference memory namespaces
         (product + version combinations) with chunk counts and ingestion dates."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
@@ -295,14 +295,14 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
             )
         return "\n".join(lines)
 
-    @mcp.tool()
+    @mcp.tool(name="ref_inspect")
     def inspect_reference(
         product: str,
         version: str,
         limit: int = 10,
         section_filter: str = None,
     ) -> str:
-        """[Content Plane] Inspect stored chunks for a specific product/version.
+        """[Reference] Inspect stored chunks for a specific product/version.
         Optionally filter by section name substring."""
         try:
             from qdrant_client.http.models import Filter, FieldCondition, MatchValue
@@ -338,12 +338,12 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
 
         return "\n".join(lines)
 
-    @mcp.tool()
+    @mcp.tool(name="ref_purge")
     def purge_reference(
         product: str,
         version: str,
     ) -> str:
-        """[Content Plane] Remove all reference memory chunks for a product/version.
+        """[Reference] Remove all reference memory chunks for a product/version.
         This is destructive and irreversible. Re-ingest to restore."""
         try:
             qdrant.delete(
@@ -363,9 +363,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
     # STATIC MEMORY CRUD
     # -----------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="static_list")
     def list_static() -> str:
-        """[Content Plane] List all static memory rules with IDs and active status."""
+        """[Static] List all static memory rules with IDs and active status."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
                 cur.execute("""
@@ -390,9 +390,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
             )
         return "\n".join(lines)
 
-    @mcp.tool()
+    @mcp.tool(name="static_create")
     def create_static(content: str, mode: str = "global") -> str:
-        """[Content Plane] Add a new static memory rule.
+        """[Static] Add a new static memory rule.
         mode: 'global' (always injected) or one of the canonical mode names."""
         valid = {"global", "engineering", "implementation", "brainstorming", "formal_spec", "casual"}
         if mode not in valid:
@@ -409,9 +409,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         log.info(f"Operator action: CREATE_STATIC id={new_id} mode={mode}")
         return f"✅ Static rule created: `{new_id}` (mode={mode})"
 
-    @mcp.tool()
+    @mcp.tool(name="static_update")
     def update_static(rule_id: str, content: str, mode: str = "global") -> str:
-        """[Content Plane] Update content and/or mode of an existing static rule."""
+        """[Static] Update content and/or mode of an existing static rule."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
                 cur.execute("""
@@ -425,9 +425,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         log.info(f"Operator action: UPDATE_STATIC id={rule_id}")
         return f"✅ Rule `{rule_id}` updated."
 
-    @mcp.tool()
+    @mcp.tool(name="static_toggle")
     def toggle_static(rule_id: str, active: bool) -> str:
-        """[Content Plane] Activate or deactivate a static rule without deleting it.
+        """[Static] Activate or deactivate a static rule without deleting it.
         Deactivated rules are not injected into prompts."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
@@ -443,9 +443,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         log.info(f"Operator action: TOGGLE_STATIC id={rule_id} active={active}")
         return f"✅ Rule `{rule_id}` {state}."
 
-    @mcp.tool()
+    @mcp.tool(name="static_delete")
     def delete_static(rule_id: str) -> str:
-        """[Content Plane] Permanently delete a static rule. Use toggle_static to
+        """[Static] Permanently delete a static rule. Use toggle_static to
         temporarily deactivate instead."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
@@ -461,9 +461,9 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
     # CACHE CONTROL
     # -----------------------------------------------------------------------
 
-    @mcp.tool()
+    @mcp.tool(name="cache_control")
     def control_cache(action: str) -> str:
-        """[Content Plane] Manage the static memory cache.
+        """[Cache] Manage the static memory cache.
         action: 'refresh' (reload from Qdrant) or 'evict' (clear, force next-request reload)."""
         from memory_steward_mcp.cache import StaticMemoryCacheManager
         if action == "refresh":

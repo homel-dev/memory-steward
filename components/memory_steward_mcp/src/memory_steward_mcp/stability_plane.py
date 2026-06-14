@@ -35,9 +35,9 @@ def _get_config(key: str) -> str | None:
 
 def register_stability_tools(mcp: FastMCP):
 
-    @mcp.tool()
+    @mcp.tool(name="config_set_budget")
     def set_token_budget(value: int) -> str:
-        """[Stability] Adjusts MAX_CONTEXT_TOKENS. Persisted to Postgres so
+        """[Config] Adjusts MAX_CONTEXT_TOKENS. Persisted to Postgres so
         router picks it up on next config reload. Range: 512–200000."""
         if not (512 <= value <= 200000):
             return f"Value {value} out of range. Must be 512–200000."
@@ -48,9 +48,9 @@ def register_stability_tools(mcp: FastMCP):
             f"Router will apply on next reload (restart or config poll interval)."
         )
 
-    @mcp.tool()
+    @mcp.tool(name="config_force_mode")
     def force_mode(mode: str) -> str:
-        """[Stability] Overrides mode classification for all subsequent requests.
+        """[Config] Overrides mode classification for all subsequent requests.
         Set to 'off' to remove the override."""
         if mode != "off" and mode not in VALID_MODES:
             return f"Invalid mode '{mode}'. Must be one of: {VALID_MODES | {'off'}}"
@@ -61,9 +61,9 @@ def register_stability_tools(mcp: FastMCP):
             return "Mode override cleared. Steward will classify normally."
         return f"Mode override set to '{mode}' in Postgres runtime_config."
 
-    @mcp.tool()
+    @mcp.tool(name="config_set_hysteresis")
     def configure_hysteresis(window: int) -> str:
-        """[Stability] Set hysteresis window (number of turns before mode transition).
+        """[Config] Set hysteresis window (number of turns before mode transition).
         Higher = more stable, slower to adapt. Range: 1–50."""
         if not (1 <= window <= 50):
             return f"Window {window} out of range. Must be 1–50."
@@ -71,9 +71,9 @@ def register_stability_tools(mcp: FastMCP):
         log.info(f"Operator action: SET_HYSTERESIS window={window}")
         return f"Hysteresis window set to {window} in Postgres runtime_config."
 
-    @mcp.tool()
+    @mcp.tool(name="config_show")
     def get_stability_config() -> str:
-        """[Stability] Show current stability configuration from Postgres."""
+        """[Config] Show current stability configuration from Postgres."""
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
                 cur.execute("SELECT key, value, updated_at FROM runtime_config ORDER BY key")
