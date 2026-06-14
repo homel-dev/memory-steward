@@ -1,4 +1,4 @@
-# components/memory_router/tests/conftest.py
+# components/memory_steward/tests/conftest.py
 """
 Shared fixtures and environment setup for all tests.
 All external dependencies (Postgres, Qdrant, embeddings, LLM) are mocked.
@@ -24,6 +24,8 @@ os.environ.update({
     "MEMORY_STEWARD_SERVICE_HOST": "localhost",
     "MEMORY_STEWARD_SERVICE_PORT": "8090",
     "QDRANT_COLLECTION": "test_memory",
+    # Shared llm-runtime migration: steward server _req()s this at import.
+    "STEWARD_LLM_BASE_URL": "http://localhost:8001",
     "BUILDER_MODEL": "gpt-test",
     "MCP_URL": "http://localhost:8081/mcp",
     "OPEN_WEBUI_URL": "http://localhost:8080",
