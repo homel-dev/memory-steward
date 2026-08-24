@@ -22,7 +22,7 @@ spec:
           containers:
             - name: backup
               # Local minikube default. For GHCR: ghcr.io/<owner>/<repo>/tooling:latest
-              image: homel/tooling:dev
+              image: ghcr.io/homel-dev/memory-steward/tooling:latest
               imagePullPolicy: IfNotPresent
               command: ["bash", "/opt/tooling/backup.sh"]
               env:
