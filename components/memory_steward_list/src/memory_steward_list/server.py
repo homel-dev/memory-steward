@@ -3,12 +3,14 @@ LIST (Local Input Speech Transcriber) Extension Entrypoint.
 Aligned with Document 12 Section 4.
 """
 
-import time
 import logging
-from fastapi import FastAPI, UploadFile, File, HTTPException, status
+import time
+from typing import Annotated
+
+from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from memory_steward_list.service import TranscriptionService
 from memory_steward_list.config import APP_VERSION, WHISPER_MODEL_SIZE
+from memory_steward_list.service import TranscriptionService
 from memory_steward_list.telemetry import record_transcription
 
 logging.getLogger("multipart").setLevel(logging.WARNING)
@@ -34,7 +36,7 @@ def startup_event():
     """Pre-load model on startup to ensure readiness."""
     try:
         TranscriptionService.get_model()
-    except Exception:
+    except Exception:  # noqa: BLE001 -- startup boundary must tolerate backend-specific load failures
         log.error("Model failed to load on startup. First request will retry.")
 
 @app.get("/healthz")
@@ -44,7 +46,7 @@ def healthz():
 
 @app.post("/v1/audio/transcriptions", status_code=200)
 @app.post("/v1/list/transcribe", status_code=200)
-async def transcribe(file: UploadFile = File(...)):
+async def transcribe(file: Annotated[UploadFile, File()]):
     """
     Contract: POST /v1/list/transcribe
     Input: multipart/form-data, field 'file'
@@ -73,7 +75,7 @@ async def transcribe(file: UploadFile = File(...)):
         
         return {"text": text}
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 -- API boundary normalizes backend-specific failures
         duration_ms = int((time.time() - t0) * 1000)
         error_msg = str(e)
         

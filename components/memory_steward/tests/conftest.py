@@ -26,8 +26,6 @@ os.environ.update({
     "STEWARD_LLM_BASE_URL": "http://localhost:8001",
     "STEWARD_MODEL": "steward-test",
     "QDRANT_COLLECTION": "test_memory",
-    # Shared llm-runtime migration: steward server _req()s this at import.
-    "STEWARD_LLM_BASE_URL": "http://localhost:8001",
     "BUILDER_MODEL": "gpt-test",
     "MCP_URL": "http://localhost:8081/mcp",
     "OPEN_WEBUI_URL": "http://localhost:8080",

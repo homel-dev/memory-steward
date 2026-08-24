@@ -4,8 +4,10 @@ Handles model loading and audio processing.
 """
 
 import logging
+
 from faster_whisper import WhisperModel
-from memory_steward_list.config import WHISPER_MODEL_SIZE, DEVICE, COMPUTE_TYPE
+
+from memory_steward_list.config import COMPUTE_TYPE, DEVICE, WHISPER_MODEL_SIZE
 
 log = logging.getLogger("memory-steward-list.service")
 
@@ -26,7 +28,7 @@ class TranscriptionService:
                 log.info("Whisper model loaded successfully.")
             except Exception as e:
                 log.critical(f"Failed to load Whisper model: {e}")
-                raise e
+                raise
         return cls._model
 
     @classmethod

@@ -5,7 +5,7 @@ Defines model parameters and runtime settings.
 
 import os
 
-def _env(name: str, default: str = None) -> str:
+def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 # Model Selection: tiny, base, small, medium, large-v2, large-v3
