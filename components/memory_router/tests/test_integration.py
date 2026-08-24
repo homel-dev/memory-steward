@@ -234,3 +234,42 @@ class TestStaticRulesAlwaysInjected:
         assert any("Always respond in English" in r for r in global_rules), (
             f"Static rule not found in policy_layer.global. Got: {global_rules}"
         )
+
+# ---------------------------------------------------------------------------
+# AMP /v1/context/retrieve
+# ---------------------------------------------------------------------------
+
+class TestAgentContextRetrieve:
+
+    def test_returns_structured_context_without_builder_call(self):
+        structured = {
+            "policy_layer": {"global": ["rule"]},
+            "system_ontology": {"REF": ["spec"]},
+            "retrieval_context": {"DYNAMIC": ["fact"]},
+            "selected_items": [{"id": "point-1", "memory_type": "dynamic_memory"}],
+            "accounting": {
+                "dense_candidates": 1,
+                "selected_topk": 1,
+                "context_tokens_est": 10,
+                "static_tokens_est": 5,
+                "dynamic_tokens_est": 5,
+                "dropped_budget": 0,
+                "dropped_no_content": 0,
+            },
+        }
+        with patch("memory_router.server._retrieve_context_structured", return_value=structured), \
+             patch("memory_router.server._get_builder_default_model", return_value="gpt-test"), \
+             patch("memory_router.server.requests.post") as post, \
+             patch("memory_router.server.telemetry"):
+            resp = client.post(
+                "/v1/context/retrieve",
+                headers={"X-Project-ID": "agent-project"},
+                json={"query": "inspect auth flow"},
+            )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["project_id"] == "agent-project"
+        assert body["retrieval_context"] == {"DYNAMIC": ["fact"]}
+        assert body["selected_items"][0]["id"] == "point-1"
+        assert body["context_request_id"]
+        post.assert_not_called()

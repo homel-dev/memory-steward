@@ -239,3 +239,30 @@ class TestExtract:
             system_content = payload["messages"][0]["content"]
             assert "nice to meet you" not in system_content
             assert "my name is Alice" in system_content
+
+# ---------------------------------------------------------------------------
+# AMP artifact hashing / repository identity
+# ---------------------------------------------------------------------------
+
+class TestAmpArtifacts:
+
+    def test_canonical_payload_hash_is_key_order_independent(self):
+        a = steward._canonical_payload_hash({"b": 2, "a": 1})
+        b = steward._canonical_payload_hash({"a": 1, "b": 2})
+        assert a == b
+
+    def test_repository_identity_inherits_outcome_state(self):
+        payload = {"nodes": []}
+        artifact = steward.AgentArtifact(
+            artifact_type="repository_ir",
+            schema_version="1",
+            producer_type="analyzer",
+            producer_version="repo-analyzer/1",
+            content_hash=steward._canonical_payload_hash(payload),
+            payload=payload,
+        )
+        repo, revision = steward._repository_identity(
+            artifact, {"repository": "homel-dev/rr", "revision": "abc123"}
+        )
+        assert repo == "homel-dev/rr"
+        assert revision == "abc123"

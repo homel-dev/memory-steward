@@ -30,6 +30,7 @@ from memory_steward_mcp.content_plane import register_content_tools, _ingest_tex
 from memory_steward_mcp.stability_plane import register_stability_tools
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
 from memory_steward_mcp.git_plane import register_git_tools
+from memory_steward_mcp.agent_plane import register_agent_tools
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)
@@ -74,6 +75,7 @@ if qdrant:
     register_git_tools(mcp, ingest_text_fn=partial(_ingest_text_internal, qdrant))
 
 register_stability_tools(mcp)
+register_agent_tools(mcp)
 
 # ==============================================================================
 # 3. ENTRYPOINT

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # components/memory_router/src/memory_router/server.py
 
 import hashlib
@@ -220,6 +222,23 @@ class ChatCompletionRequest(BaseModel):
     mode: Optional[str] = None
 
 
+class ArtifactSelector(BaseModel):
+    artifact_type: str = Field(..., min_length=1, max_length=128)
+    repository: Optional[str] = Field(default=None, max_length=1024)
+    revision: Optional[str] = Field(default=None, max_length=256)
+    schema_version: Optional[str] = Field(default=None, max_length=64)
+    producer_type: Optional[str] = Field(default=None, max_length=32)
+    content_hash: Optional[str] = Field(default=None, max_length=64)
+
+
+class ContextRetrieveRequest(BaseModel):
+    query: Optional[str] = Field(default=None, min_length=1)
+    mode: Optional[str] = None
+    model: Optional[str] = None
+    recent_messages: List[ChatMessage] = Field(default_factory=list)
+    artifact_selectors: List[ArtifactSelector] = Field(default_factory=list, max_length=32)
+
+
 class StaticUpsert(BaseModel):
     project_id: str = Field(..., min_length=1)
     key: str = Field(..., min_length=1)
@@ -390,6 +409,69 @@ def _extract_static_rules(
     return rules
 
 
+def _pg_agent_reference_load(
+    project_id: str, selectors: List[ArtifactSelector]
+) -> List[Dict[str, Any]]:
+    """Exact Postgres lookup for versioned structured AMP agent_reference artifacts."""
+    artifacts: List[Dict[str, Any]] = []
+    if not selectors:
+        return artifacts
+
+    with _pg() as conn, conn.cursor() as cur:
+        for selector in selectors:
+            where = ["project_id = %s", "artifact_type = %s"]
+            params: List[Any] = [project_id, selector.artifact_type]
+            for column, value in (
+                ("repository", selector.repository),
+                ("revision", selector.revision),
+                ("schema_version", selector.schema_version),
+                ("producer_type", selector.producer_type),
+                ("content_hash", selector.content_hash),
+            ):
+                if value is not None:
+                    where.append(f"{column} = %s")
+                    params.append(value)
+            cur.execute(
+                f"""
+                SELECT id, repository, revision, artifact_type, schema_version,
+                       producer_type, producer_name, producer_version, content_hash,
+                       payload, provenance, source_outcome_id, created_at
+                FROM agent_reference
+                WHERE {' AND '.join(where)}
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                params,
+            )
+            row = cur.fetchone()
+            if not row:
+                continue
+            payload = row[9]
+            provenance = row[10]
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            if isinstance(provenance, str):
+                provenance = json.loads(provenance)
+            artifacts.append(
+                {
+                    "id": str(row[0]),
+                    "repository": row[1],
+                    "revision": row[2],
+                    "artifact_type": row[3],
+                    "schema_version": row[4],
+                    "producer_type": row[5],
+                    "producer_name": row[6],
+                    "producer_version": row[7],
+                    "content_hash": row[8],
+                    "payload": payload,
+                    "provenance": provenance,
+                    "source_outcome_id": row[11],
+                    "created_at": row[12].isoformat() if hasattr(row[12], "isoformat") else str(row[12]),
+                }
+            )
+    return artifacts
+
+
 # ------------------------------------------------------------------------------
 # Memory Retrieval & Logic (UPGRADED)
 # ------------------------------------------------------------------------------
@@ -414,6 +496,7 @@ def _qdrant_dense(project_id: str, vec: List[float], limit: int) -> List[Candida
         "filter": {
             "must": [
                 {"key": "project_id", "match": {"value": project_id}},
+                {"key": "memory_type", "match": {"value": "dynamic_memory"}},
             ]
         },
     }
@@ -637,72 +720,141 @@ def _stitch_context_structured(
     )
 
 
-def _assemble_context(
+def _selected_candidate_refs(
+    candidates: List[Candidate],
+    max_tokens: int,
+    model: str,
+) -> List[Dict[str, Any]]:
+    """Return stable identifiers/provenance for candidates admitted by stitch budget."""
+    refs: List[Dict[str, Any]] = []
+    used_tokens = 0
+    for c in candidates:
+        if not c.content or not c.content.strip():
+            continue
+        if c.token_count == 0:
+            c.token_count = _count_tokens(model, c.content)
+        cost = c.token_count + 5
+        if used_tokens + cost > max_tokens:
+            continue
+        md = c.metadata or {}
+        refs.append(
+            {
+                "id": c.id,
+                "memory_type": md.get("memory_type"),
+                "source": md.get("source"),
+                "namespace": md.get("namespace"),
+                "product": md.get("product"),
+                "version": md.get("version"),
+                "scope": md.get("scope"),
+                "evidence_ref": md.get("evidence_ref"),
+                "content_hash": md.get("content_hash"),
+            }
+        )
+        used_tokens += cost
+    return refs
+
+
+def _retrieve_context_structured(
     request_id: str,
     project_id: str,
-    query: str,
+    query: Optional[str],
     model: str,
-    recent_messages: List[ChatMessage],
     mode: Optional[str] = None,
-) -> Tuple[str, int, int, int, int, int, int, int]:
-    # 1) Embed
-    with telemetry.step(request_id=request_id, project_id=project_id, name="embed"):
-        query_vec = _embed_one(query)
-
-    # 2) Static memory
+    artifact_selectors: Optional[List[ArtifactSelector]] = None,
+) -> Dict[str, Any]:
+    """Canonical retrieval operation shared by chat and AMP agent retrieval."""
     with telemetry.step(request_id=request_id, project_id=project_id, name="pg_static"):
         static_rows = _pg_static_load(mode=mode)
         static_rules = _extract_static_rules(static_rows)
         static_tokens_est = 200
 
-    # 3) Dense retrieval (dynamic memory, project-scoped)
-    with telemetry.step(
-        request_id=request_id, project_id=project_id, name="qdrant_search"
-    ):
-        raw_candidates = _qdrant_dense(project_id, query_vec, DENSE_PREFETCH)
+    with telemetry.step(request_id=request_id, project_id=project_id, name="pg_agent_reference"):
+        agent_artifacts = _pg_agent_reference_load(project_id, artifact_selectors or [])
 
-    # 3b) Reference retrieval (mode-gated; Doc 03 §6). Reference carries no
-    #     project_id, so it is invisible to the project-scoped path above.
-    #     Safe-default mode is engineering (Doc 02 §8.1), so this is on by default.
-    if REFERENCE_RETRIEVAL_ENABLED and (mode or "engineering") in REFERENCE_MODES:
+    raw_candidates: List[Candidate] = []
+    reranked: List[Candidate] = []
+    ontology_dict: Dict[str, List[str]] = {}
+    context_dict: Dict[str, List[str]] = {}
+    selected_count = 0
+    dynamic_tokens_est = 0
+    dropped_budget = 0
+    dropped_no_content = 0
+    selected_items: List[Dict[str, Any]] = []
+
+    if query:
+        with telemetry.step(request_id=request_id, project_id=project_id, name="embed"):
+            query_vec = _embed_one(query)
         with telemetry.step(
-            request_id=request_id, project_id=project_id, name="qdrant_reference"
+            request_id=request_id, project_id=project_id, name="qdrant_search"
         ):
-            ref_candidates = _qdrant_reference(query_vec, DENSE_PREFETCH)
-        # Prepend reference so it competes in MMR and lands in system_ontology.
-        raw_candidates = ref_candidates + raw_candidates
+            raw_candidates = _qdrant_dense(project_id, query_vec, DENSE_PREFETCH)
 
-    # 4) Rerank (MMR)
-    reranked = _maximal_marginal_relevance(
-        query_vec=query_vec,
-        candidates=raw_candidates,
-        top_k=TOP_K,
-        lambda_mult=MMR_LAMBDA,
-    )
+        if REFERENCE_RETRIEVAL_ENABLED and (mode or "engineering") in REFERENCE_MODES:
+            with telemetry.step(
+                request_id=request_id, project_id=project_id, name="qdrant_reference"
+            ):
+                ref_candidates = _qdrant_reference(query_vec, DENSE_PREFETCH)
+            raw_candidates = ref_candidates + raw_candidates
 
-    # 5) Stitch (budget: effective MAX_CONTEXT_TOKENS - static_tokens_est)
-    dense_budget = max(0, _effective_max_context_tokens() - static_tokens_est)
-    (
-        ontology_dict,
-        context_dict,
-        selected_count,
+        reranked = _maximal_marginal_relevance(
+            query_vec=query_vec,
+            candidates=raw_candidates,
+            top_k=TOP_K,
+            lambda_mult=MMR_LAMBDA,
+        )
+        dense_budget = max(0, _effective_max_context_tokens() - static_tokens_est)
+        (
+            ontology_dict,
+            context_dict,
+            selected_count,
+            dynamic_tokens_est,
+            dropped_budget,
+            dropped_no_content,
+        ) = _stitch_context_structured(
+            candidates=reranked,
+            max_tokens=dense_budget,
+            model=model,
+        )
+        selected_items = _selected_candidate_refs(reranked, dense_budget, model)
+    context_tokens_est = static_tokens_est + dynamic_tokens_est
+
+    log.info(
+        "context.retrieval_complete request_id=%s static_tokens_est=%d dynamic_tokens_est=%d context_tokens_est=%d",
+        request_id,
+        static_tokens_est,
         dynamic_tokens_est,
-        dropped_budget,
-        dropped_no_content,
-    ) = _stitch_context_structured(
-        candidates=reranked,
-        max_tokens=dense_budget,
-        model=model,
+        context_tokens_est,
     )
 
-    # Extract Last N turns
+    return {
+        "policy_layer": static_rules,
+        "system_ontology": ontology_dict,
+        "retrieval_context": context_dict,
+        "agent_reference": agent_artifacts,
+        "selected_items": selected_items,
+        "accounting": {
+            "dense_candidates": len(raw_candidates),
+            "selected_topk": selected_count,
+            "context_tokens_est": context_tokens_est,
+            "static_tokens_est": static_tokens_est,
+            "dynamic_tokens_est": dynamic_tokens_est,
+            "dropped_budget": dropped_budget,
+            "dropped_no_content": dropped_no_content,
+        },
+    }
+
+
+def _render_context_envelope(
+    retrieval: Dict[str, Any],
+    query: str,
+    recent_messages: List[ChatMessage],
+) -> str:
+    """Chat-only projection of structured retrieval into the canonical envelope."""
     dialogue_history = [
         {"role": m.role, "content": m.content} for m in recent_messages[-4:]
     ]
-
-    # 6) Construct Canonical Envelope
     envelope = {
-        "policy_layer": static_rules,
+        "policy_layer": retrieval["policy_layer"],
         "enforcement_protocol": {
             "steps": [
                 "1. Parse the entire canonical envelope before generating output.",
@@ -722,8 +874,8 @@ def _assemble_context(
                 "command does not execute it.",
             ]
         },
-        "system_ontology": ontology_dict,
-        "retrieval_context": context_dict,
+        "system_ontology": retrieval["system_ontology"],
+        "retrieval_context": retrieval["retrieval_context"],
         "dialogue_state": {"recent_turns": dialogue_history},
         "current_objective": {"instruction": query},
         "final_reminder": (
@@ -735,42 +887,41 @@ def _assemble_context(
             "Non-compliant output is invalid."
         ),
     }
-
     final_text = json.dumps(envelope, indent=2)
-    context_tokens_est = static_tokens_est + dynamic_tokens_est
-
-    log.info(
-        "context.assembly_complete request_id=%s static_tokens_est=%d dynamic_tokens_est=%d context_tokens_est=%d",
-        request_id,
-        static_tokens_est,
-        dynamic_tokens_est,
-        context_tokens_est,
-    )
-
     if DEBUG_PROMPTS:
-        log.info(
-            "debug.context_assembly request_id=%s final_text=\n%s",
-            request_id,
-            final_text,
-        )
+        log.info("debug.context_assembly final_text=\n%s", final_text)
+    return final_text
 
+
+def _assemble_context(
+    request_id: str,
+    project_id: str,
+    query: str,
+    model: str,
+    recent_messages: List[ChatMessage],
+    mode: Optional[str] = None,
+) -> Tuple[str, int, int, int, int, int, int, int]:
+    """Compatibility wrapper for callers/tests using the pre-AMP helper."""
+    retrieval = _retrieve_context_structured(
+        request_id=request_id,
+        project_id=project_id,
+        query=query,
+        model=model,
+        mode=mode,
+    )
+    final_text = _render_context_envelope(retrieval, query, recent_messages)
+    a = retrieval["accounting"]
     return (
         final_text,
-        len(raw_candidates),
-        selected_count,
-        context_tokens_est,
-        static_tokens_est,
-        dynamic_tokens_est,
-        dropped_budget,
-        dropped_no_content,
+        a["dense_candidates"],
+        a["selected_topk"],
+        a["context_tokens_est"],
+        a["static_tokens_est"],
+        a["dynamic_tokens_est"],
+        a["dropped_budget"],
+        a["dropped_no_content"],
     )
 
-
-# ------------------------------------------------------------------------------
-# Builder Helpers
-# ------------------------------------------------------------------------------
-
-_default_model_cache: Optional[str] = None
 
 
 def _normalize_builder_base(url: str) -> str:
@@ -861,6 +1012,73 @@ def list_models():
     }
 
 
+@app.post("/v1/context/retrieve")
+def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
+    if not req.query and not req.artifact_selectors:
+        raise HTTPException(status_code=422, detail="query or artifact_selectors is required")
+    context_request_id = uuid.uuid4().hex
+    pid = _project_id(http_req)
+    origin = _origin_base(http_req)
+    model = (req.model or "").strip() or _effective_builder_model() or _get_builder_default_model()
+
+    telemetry.request_begin(
+        request_id=context_request_id,
+        project_id=pid,
+        origin=origin,
+        origin_hash=None,
+        model_requested=req.model,
+        decided_mode=req.mode,
+        context_budget_max=_effective_max_context_tokens(),
+        static_tokens_est=None,
+        dynamic_tokens_est=None,
+    )
+    try:
+        retrieval = _retrieve_context_structured(
+            request_id=context_request_id,
+            project_id=pid,
+            query=req.query,
+            model=model,
+            mode=req.mode,
+            artifact_selectors=req.artifact_selectors,
+        )
+        a = retrieval["accounting"]
+        telemetry.retrieval_write(
+            request_id=context_request_id,
+            project_id=pid,
+            dense_candidates=a["dense_candidates"],
+            selected_topk=a["selected_topk"],
+            context_tokens_est=a["context_tokens_est"],
+            dropped_budget=a["dropped_budget"],
+            dropped_no_content=a["dropped_no_content"],
+            dropped_other=0,
+        )
+        telemetry.request_end(
+            request_id=context_request_id,
+            http_status=200,
+            context_budget_max=_effective_max_context_tokens(),
+            static_tokens_est=a["static_tokens_est"],
+            dynamic_tokens_est=a["dynamic_tokens_est"],
+        )
+        return {
+            "context_request_id": context_request_id,
+            "project_id": pid,
+            "mode": req.mode,
+            "dialogue_state": {
+                "recent_turns": [m.model_dump(mode="json") for m in req.recent_messages[-4:]]
+            },
+            **retrieval,
+        }
+    except Exception as exc:
+        telemetry.request_end(
+            request_id=context_request_id,
+            http_status=500,
+            error_kind=type(exc).__name__,
+            error_detail=str(exc),
+        )
+        log.exception("agent context retrieval failed request_id=%s", context_request_id)
+        raise HTTPException(status_code=500, detail="context retrieval failed") from exc
+
+
 @app.post("/v1/chat/completions")
 def chat(req: ChatCompletionRequest, http_req: Request):
     request_id = uuid.uuid4().hex
@@ -942,23 +1160,22 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         # CONTEXT ASSEMBLY
         # ------------------------------------------------------------------
 
-        (
-            system_ctx,
-            dense_candidates,
-            selected_topk,
-            context_tokens_est,
-            static_tokens_est,
-            dynamic_tokens_est,
-            dropped_budget,
-            dropped_no_content,
-        ) = _assemble_context(
+        retrieval = _retrieve_context_structured(
             request_id=request_id,
             project_id=pid,
             query=user_text,
             model=model,
-            recent_messages=pruned_history,
             mode=req.mode,
         )
+        system_ctx = _render_context_envelope(retrieval, user_text, pruned_history)
+        accounting = retrieval["accounting"]
+        dense_candidates = accounting["dense_candidates"]
+        selected_topk = accounting["selected_topk"]
+        context_tokens_est = accounting["context_tokens_est"]
+        static_tokens_est = accounting["static_tokens_est"]
+        dynamic_tokens_est = accounting["dynamic_tokens_est"]
+        dropped_budget = accounting["dropped_budget"]
+        dropped_no_content = accounting["dropped_no_content"]
 
         telemetry.retrieval_write(
             request_id=request_id,

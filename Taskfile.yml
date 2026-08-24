@@ -414,6 +414,70 @@ tasks:
       - kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://localhost:8080/healthz
       - kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://memory-steward:8090/healthz
 
+  verify:amp:
+    desc: "Smoke-test AMP artifact write + exact Router retrieval (no LLM required)"
+    cmds:
+      - |
+        kubectl exec -i -n {{.NAMESPACE}} deploy/memory-router -- python - <<'PY'
+        import hashlib
+        import json
+        import requests
+
+        project_id = "amp-smoke"
+        payload = {"smoke": "amp", "version": 1}
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        content_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+        outcome = requests.post(
+            "http://memory-steward:8090/v1/agent/outcomes",
+            json={
+                "outcome_id": "amp-smoke-v1",
+                "project_id": project_id,
+                "objective": "AMP deterministic artifact smoke test",
+                "result": "artifact generated",
+                "admit_knowledge": False,
+                "repository_state": {"repository": "amp-smoke", "revision": "smoke-v1"},
+                "artifacts": [{
+                    "artifact_type": "repository_ir",
+                    "schema_version": "1",
+                    "producer_type": "analyzer",
+                    "producer_name": "amp-smoke",
+                    "producer_version": "1",
+                    "content_hash": content_hash,
+                    "payload": payload,
+                    "provenance": [{"kind": "smoke_test"}],
+                }],
+            },
+            timeout=30,
+        )
+        outcome.raise_for_status()
+
+        retrieved = requests.post(
+            "http://localhost:8080/v1/context/retrieve",
+            headers={"X-Project-ID": project_id},
+            json={
+                "artifact_selectors": [{
+                    "artifact_type": "repository_ir",
+                    "repository": "amp-smoke",
+                    "revision": "smoke-v1",
+                }]
+            },
+            timeout=30,
+        )
+        retrieved.raise_for_status()
+        body = retrieved.json()
+        artifacts = body.get("agent_reference", [])
+        assert artifacts, body
+        assert artifacts[0]["payload"] == payload, body
+        assert artifacts[0]["content_hash"] == content_hash, body
+        print(json.dumps({
+            "ok": True,
+            "outcome": outcome.json(),
+            "context_request_id": body["context_request_id"],
+            "artifact_id": artifacts[0]["id"],
+        }, indent=2))
+        PY
+
   logs:router:
     desc: "Tail Router Logs"
     cmds:

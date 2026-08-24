@@ -320,9 +320,12 @@ The Memory Router MUST expose:
 
 The request MUST carry enough information to resolve:
 - `project_id` using the Router's canonical project-resolution mechanism.
-- The agent query or objective.
+- The agent query or objective, unless the request is an exact artifact-only lookup.
 - Optional operational `mode`.
 - Optional bounded recent dialogue or task context when required by the caller.
+- Optional `artifact_selectors` for exact Postgres retrieval of versioned `agent_reference` artifacts. Selectors MAY constrain repository, revision, artifact type, schema version, producer type, or content hash.
+
+The request MUST include at least one of: an agent query/objective, or one or more `artifact_selectors`. Exact artifact selection MUST NOT require embedding or semantic retrieval when the caller already knows artifact identity.
 
 The response MUST include:
 - `context_request_id`.
@@ -330,6 +333,7 @@ The response MUST include:
 - Structured `policy_layer`.
 - Structured `system_ontology`.
 - Structured `retrieval_context`.
+- Requested exact `agent_reference` artifacts, when selectors were supplied.
 - Selected memory/reference identifiers and provenance metadata.
 - Retrieval accounting sufficient for diagnostics and feedback.
 
@@ -357,8 +361,9 @@ The request MUST support:
 - `artifacts`.
 - `repository_state` when the task is repository-scoped.
 - Evidence/provenance references where available.
+- Optional `admit_knowledge` (default `true`). Setting it to `false` is permitted for artifact-only/evidence-only submissions that must not invoke LLM durable-knowledge extraction. This flag MUST NOT cause any claim to bypass governed admission; it only suppresses creation of durable learned-memory candidates.
 
-Repeated submission of the same idempotency identity MUST NOT create duplicate durable memory or duplicate reusable artifacts.
+Repeated submission of the same idempotency identity with the same canonical request payload MUST NOT create duplicate durable memory or duplicate reusable artifacts. Reuse of an existing idempotency identity with a different canonical request payload MUST be rejected as a conflict.
 
 The Steward MUST use an agent-outcome-specific normalizer/extractor. Ordinary chat admission and agent outcome admission MAY use different extraction prompts and policies, but they MUST converge on the same governed admission core for durable knowledge.
 
@@ -378,7 +383,7 @@ Canonical examples include:
 - Generated summaries of large code surfaces.
 - Product-model or objective-decomposition artifacts.
 
-Reusable artifacts MUST carry sufficient identity and provenance to distinguish one repository/product state from another. Repository-scoped artifacts SHOULD include:
+Reusable artifacts MUST carry sufficient identity and provenance to distinguish one repository/product state from another. `content_hash` is the lowercase SHA-256 of the UTF-8 encoded canonical JSON payload, with object keys sorted, no insignificant whitespace, and non-ASCII characters preserved. Repository-scoped artifacts SHOULD include:
 - Repository identity.
 - Revision or tree hash.
 - Artifact type.
@@ -400,7 +405,7 @@ Deterministic analyzer/tool artifacts MAY be persisted without LLM admission whe
 
 Agent-inferred claims and decisions that are candidates for durable knowledge MUST pass the governed admission path.
 
-Postgres MUST remain the canonical store for structured artifact identity, provenance, and payload. Qdrant MAY index semantic projections of an artifact when semantic discovery is useful; Qdrant MUST NOT become the sole canonical representation of the structured artifact.
+Postgres MUST remain the canonical store for structured artifact identity, provenance, and payload. Qdrant MAY index semantic projections of an artifact when semantic discovery is useful; Qdrant MUST NOT become the sole canonical representation of the structured artifact. Exact retrieval of a known artifact MUST use the shared Router retrieval operation with `artifact_selectors` rather than requiring a semantic Qdrant round-trip.
 
 ### 5.7 Shared Admission Core
 

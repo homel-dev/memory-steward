@@ -10,6 +10,7 @@ data:
   #BUILDER_BASE_URL: "http://vllm-builder:8000/v1"
   BUILDER_BASE_URL: "https://api.openai.com/v1"
   STEWARD_URL: "http://memory-steward:8090"
+  MEMORY_ROUTER_URL: "http://memory-router:8080"
   STEWARD_LLM_BASE_URL: "http://llm-large.llm-runtime.svc.cluster.local:8000"
   AUDITOR_LLM_BASE_URL: "http://llm-small.llm-runtime.svc.cluster.local:8000"
   MCP_URL: "http://memory-steward-mcp:8081/mcp"

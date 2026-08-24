@@ -128,3 +128,133 @@ class TestAdmission:
         assert resp.status_code == 200
         # rowcount=1 per insert, 2 fragments → inserted=2
         assert resp.json()["inserted"] == 2
+
+# ---------------------------------------------------------------------------
+# AMP agent outcomes / feedback
+# ---------------------------------------------------------------------------
+
+class TestAgentOutcome:
+
+    def test_structured_outcome_happy_path(self):
+        with patch("memory_steward.server._prepare_outcome", return_value=None), \
+             patch("memory_steward.server._extract_agent_outcome", return_value=["Verified release uses task deploy"]), \
+             patch("memory_steward.server._persist_dynamic_fragments", return_value=(1, 1)), \
+             patch("memory_steward.server._persist_agent_artifacts", return_value=(0, [])), \
+             patch("memory_steward.server._mark_outcome_complete"), \
+             patch("memory_steward.server.telemetry"):
+            resp = client.post("/v1/agent/outcomes", json={
+                "outcome_id": "out-1",
+                "project_id": "rr",
+                "objective": "inspect release process",
+                "result": "done",
+                "verification": {"tests": "passed"},
+            })
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["fragments_inserted"] == 1
+        assert body["idempotent_replay"] is False
+
+    def test_completed_outcome_is_idempotent_replay(self):
+        stored = {
+            "ok": True,
+            "outcome_id": "out-2",
+            "project_id": "rr",
+            "fragments_inserted": 1,
+            "artifacts_received": 0,
+            "artifacts_inserted": 0,
+            "artifact_ids": [],
+        }
+        with patch("memory_steward.server._prepare_outcome", return_value=stored), \
+             patch("memory_steward.server._extract_agent_outcome") as extract, \
+             patch("memory_steward.server.telemetry"):
+            resp = client.post("/v1/agent/outcomes", json={
+                "outcome_id": "out-2",
+                "project_id": "rr",
+                "objective": "same task",
+                "result": "same result",
+            })
+        assert resp.status_code == 200
+        assert resp.json()["idempotent_replay"] is True
+        extract.assert_not_called()
+
+    def test_artifact_hash_mismatch_rejected(self):
+        payload = {"nodes": ["a"]}
+        request = steward_server.AgentOutcomeRequest(
+            outcome_id="out-3",
+            project_id="rr",
+            objective="analyze repo",
+            result="done",
+            repository_state={"repository": "rr", "revision": "abc"},
+            artifacts=[{
+                "artifact_type": "repository_ir",
+                "schema_version": "1",
+                "producer_type": "analyzer",
+                "producer_version": "v1",
+                "content_hash": "0" * 64,
+                "payload": payload,
+            }],
+        )
+        with pytest.raises(steward_server.HTTPException) as exc:
+            steward_server._persist_agent_artifacts(request)
+        assert exc.value.status_code == 422
+
+
+class TestContextFeedback:
+
+    def test_feedback_does_not_call_admission(self):
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.__enter__ = MagicMock(return_value=mock_cur)
+        mock_cur.__exit__ = MagicMock(return_value=False)
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor = MagicMock(return_value=mock_cur)
+        with patch("memory_steward.server._pg", return_value=mock_conn), \
+             patch("memory_steward.server._persist_dynamic_fragments") as persist, \
+             patch("memory_steward.server.telemetry"):
+            resp = client.post("/v1/context/feedback", json={
+                "project_id": "rr",
+                "context_request_id": "ctx-1",
+                "used_memory_ids": ["a"],
+                "irrelevant_memory_ids": ["b"],
+                "missing_context": "release process",
+            })
+        assert resp.status_code == 200
+        persist.assert_not_called()
+
+    def test_artifact_only_outcome_skips_llm_admission(self):
+        with patch("memory_steward.server._prepare_outcome", return_value=None), \
+             patch("memory_steward.server._persist_agent_artifacts", return_value=(1, ["artifact-1"])), \
+             patch("memory_steward.server._extract_agent_outcome") as extract, \
+             patch("memory_steward.server._persist_dynamic_fragments") as persist, \
+             patch("memory_steward.server._mark_outcome_complete"), \
+             patch("memory_steward.server.telemetry"):
+            resp = client.post("/v1/agent/outcomes", json={
+                "outcome_id": "out-artifact-only",
+                "project_id": "rr",
+                "objective": "publish repository analysis",
+                "result": "analysis complete",
+                "admit_knowledge": False,
+            })
+        assert resp.status_code == 200
+        assert resp.json()["knowledge_admission_requested"] is False
+        assert resp.json()["artifacts_inserted"] == 1
+        extract.assert_not_called()
+        persist.assert_not_called()
+
+    def test_idempotency_payload_conflict_does_not_mark_original_failed(self):
+        conflict = steward_server.HTTPException(
+            status_code=409,
+            detail="outcome_id already exists with a different request payload",
+        )
+        with patch("memory_steward.server._prepare_outcome", side_effect=conflict), \
+             patch("memory_steward.server._mark_outcome_failed") as mark_failed, \
+             patch("memory_steward.server.telemetry"):
+            resp = client.post("/v1/agent/outcomes", json={
+                "outcome_id": "out-conflict",
+                "project_id": "rr",
+                "objective": "different payload",
+                "result": "different",
+            })
+        assert resp.status_code == 409
+        mark_failed.assert_not_called()

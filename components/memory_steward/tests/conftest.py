@@ -23,6 +23,8 @@ os.environ.update({
     "VLLM_BUILDER_SERVICE_PORT": "8002",
     "MEMORY_STEWARD_SERVICE_HOST": "localhost",
     "MEMORY_STEWARD_SERVICE_PORT": "8090",
+    "STEWARD_LLM_BASE_URL": "http://localhost:8001",
+    "STEWARD_MODEL": "steward-test",
     "QDRANT_COLLECTION": "test_memory",
     # Shared llm-runtime migration: steward server _req()s this at import.
     "STEWARD_LLM_BASE_URL": "http://localhost:8001",

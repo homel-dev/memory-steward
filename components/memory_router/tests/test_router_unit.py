@@ -333,3 +333,74 @@ class TestGlapIntercept:
 
     def test_glap_bare(self):
         assert "/glap".strip().lower().startswith("/glap")
+
+# ---------------------------------------------------------------------------
+# AMP retrieval lane isolation and selected provenance
+# ---------------------------------------------------------------------------
+
+class TestAmpRetrieval:
+
+    def test_dynamic_qdrant_filter_includes_memory_type(self):
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {"result": []}
+        with patch("memory_router.server.requests.post", return_value=response) as post:
+            router._qdrant_dense("project-a", [0.1, 0.2], 5)
+        payload = post.call_args.kwargs["json"]
+        must = payload["filter"]["must"]
+        assert {"key": "project_id", "match": {"value": "project-a"}} in must
+        assert {"key": "memory_type", "match": {"value": "dynamic_memory"}} in must
+
+    def test_selected_candidate_refs_preserve_ids(self):
+        candidates = [
+            Candidate(
+                id="point-1",
+                content="fact",
+                vector=[0.1, 0.2],
+                metadata={
+                    "memory_type": "dynamic_memory",
+                    "source": "dynamic",
+                    "content_hash": "abc",
+                },
+                token_count=3,
+            )
+        ]
+        refs = router._selected_candidate_refs(candidates, max_tokens=100, model="gpt-test")
+        assert refs == [{
+            "id": "point-1",
+            "memory_type": "dynamic_memory",
+            "source": "dynamic",
+            "namespace": None,
+            "product": None,
+            "version": None,
+            "scope": None,
+            "evidence_ref": None,
+            "content_hash": "abc",
+        }]
+
+    def test_artifact_only_retrieval_skips_embedding_and_qdrant(self):
+        selector = router.ArtifactSelector(
+            artifact_type="repository_ir", repository="rr", revision="abc"
+        )
+        artifact = {
+            "id": "artifact-1",
+            "artifact_type": "repository_ir",
+            "repository": "rr",
+            "revision": "abc",
+            "payload": {"nodes": []},
+        }
+        with patch("memory_router.server._pg_static_load", return_value=[]), \
+             patch("memory_router.server._pg_agent_reference_load", return_value=[artifact]), \
+             patch("memory_router.server._embed_one") as embed, \
+             patch("memory_router.server._qdrant_dense") as qdrant:
+            result = router._retrieve_context_structured(
+                request_id="ctx-1",
+                project_id="rr",
+                query=None,
+                model="gpt-test",
+                artifact_selectors=[selector],
+            )
+        assert result["agent_reference"] == [artifact]
+        assert result["retrieval_context"] == {}
+        embed.assert_not_called()
+        qdrant.assert_not_called()

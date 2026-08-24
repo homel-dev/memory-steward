@@ -16,6 +16,8 @@ def _env(name: str, default: str = None, required: bool = False) -> str:
 QDRANT_URL          = _env("QDRANT_URL", required=True)
 QDRANT_COLLECTION   = _env("QDRANT_COLLECTION", required=True)
 EMBEDDINGS_URL      = _env("EMBEDDINGS_URL", required=True)
+MEMORY_ROUTER_URL   = _env("MEMORY_ROUTER_URL", "http://memory-router:8080").rstrip("/")
+STEWARD_URL         = _env("STEWARD_URL", "http://memory-steward:8090").rstrip("/")
 
 # Diagnostics Plane
 POSTGRES_DSN        = _env("POSTGRES_DSN", required=True)
