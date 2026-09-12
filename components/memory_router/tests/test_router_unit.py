@@ -351,6 +351,66 @@ class TestAmpRetrieval:
         assert {"key": "project_id", "match": {"value": "project-a"}} in must
         assert {"key": "memory_type", "match": {"value": "dynamic_memory"}} in must
 
+    def test_reference_filter_without_narrowing(self):
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {"result": []}
+        with patch("memory_router.server.requests.post", return_value=response) as post:
+            router._qdrant_reference([0.1, 0.2], 5)
+        must = post.call_args.kwargs["json"]["filter"]["must"]
+        assert must == [
+            {"key": "memory_type", "match": {"value": "reference_memory"}}
+        ]
+
+    def test_reference_filter_product_only(self):
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {"result": []}
+        with patch("memory_router.server.requests.post", return_value=response) as post:
+            router._qdrant_reference(
+                [0.1, 0.2], 5, reference_filters={"product": "kicad"}
+            )
+        must = post.call_args.kwargs["json"]["filter"]["must"]
+        assert must == [
+            {"key": "memory_type", "match": {"value": "reference_memory"}},
+            {"key": "product", "match": {"value": "kicad"}},
+        ]
+
+    def test_reference_filter_product_and_version(self):
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = {"result": []}
+        with patch("memory_router.server.requests.post", return_value=response) as post:
+            router._qdrant_reference(
+                [0.1, 0.2],
+                5,
+                reference_filters={"product": "kicad", "version": "9.0"},
+            )
+        must = post.call_args.kwargs["json"]["filter"]["must"]
+        assert must == [
+            {"key": "memory_type", "match": {"value": "reference_memory"}},
+            {"key": "product", "match": {"value": "kicad"}},
+            {"key": "version", "match": {"value": "9.0"}},
+        ]
+
+    def test_structured_retrieval_passes_reference_filters(self):
+        filters = {"product": "kicad", "version": "9.0"}
+        with patch("memory_router.server._pg_static_load", return_value=[]), \
+             patch("memory_router.server._pg_agent_reference_load", return_value=[]), \
+             patch("memory_router.server._embed_one", return_value=[0.1, 0.2]), \
+             patch("memory_router.server._qdrant_dense", return_value=[]), \
+             patch("memory_router.server._qdrant_reference", return_value=[]) as reference:
+            router._retrieve_context_structured(
+                request_id="ctx-reference",
+                project_id="rr",
+                query="hierarchical sheet instance syntax",
+                model="gpt-test",
+                reference_filters=filters,
+            )
+        reference.assert_called_once_with(
+            [0.1, 0.2], router.DENSE_PREFETCH, reference_filters=filters
+        )
+
     def test_selected_candidate_refs_preserve_ids(self):
         candidates = [
             Candidate(

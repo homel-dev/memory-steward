@@ -38,11 +38,15 @@ def test_retrieve_context_is_thin_router_adapter():
             "inspect repo",
             "engineering",
             [{"artifact_type": "repository_ir", "repository": "rr", "revision": "abc"}],
+            {"product": "kicad", "version": "9.0"},
         )
     assert json.loads(result) == {"ok": True}
     assert post.call_args.args[0].endswith("/v1/context/retrieve")
     assert post.call_args.kwargs["headers"] == {"X-Project-ID": "rr"}
     assert post.call_args.kwargs["json"]["artifact_selectors"][0]["artifact_type"] == "repository_ir"
+    assert post.call_args.kwargs["json"]["reference_filters"] == {
+        "product": "kicad", "version": "9.0"
+    }
 
 
 def test_submit_outcome_is_thin_steward_adapter():

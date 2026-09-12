@@ -541,6 +541,40 @@ AMP does not:
 - Require semantic vector indexing for exact-key structured artifacts.
 - Redefine static, dynamic, or canonical reference authority.
 
+### 5.15 Reference Memory Narrowing Contract
+
+This section extends the Router HTTP contract in Section 5.4 and the MCP
+`memory.retrieve_context` adapter.
+
+`POST /v1/context/retrieve` and `memory.retrieve_context` MAY accept:
+
+`reference_filters: dict[str, str] | null`
+
+The v1 public whitelist MUST contain:
+- `product`
+- `version`
+- `scope`
+- `provider`
+- `source`
+
+The Router MUST reject unknown `reference_filters` keys with request validation
+failure (`HTTP 422`). Callers MUST NOT be able to filter arbitrary internal
+Qdrant or implementation metadata.
+
+`reference_filters` and `artifact_selectors` are independent contracts.
+`reference_filters` narrows semantic retrieval from canonical
+`reference_memory`; `artifact_selectors` performs exact Postgres selection of
+versioned `agent_reference` artifacts. Implementations MUST NOT merge or infer
+one from the other.
+
+Within the canonical Reference Memory lane, `memory_type = reference_memory`
+MUST always be present. Each supplied reference filter MUST add an exact-match
+metadata condition. If no reference filters are supplied, no additional
+metadata narrowing is added.
+
+The response schema is unchanged. Existing `selected_items` metadata and
+provenance fields remain authoritative.
+
 [Back to top](#navigation)
 
 ---

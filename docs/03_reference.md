@@ -366,4 +366,34 @@ One version per namespace is allowed; multiple disjoint namespaces may coexist (
 
 ---
 
+## 16. Amendment: Explicit Caller Narrowing for Generic Retrieval
+
+The v1 agent retrieval contract MAY carry an optional `reference_filters`
+mapping for explicit caller-supplied narrowing of canonical Reference Memory.
+
+The public v1 filter-key whitelist is:
+- `product`
+- `version`
+- `scope`
+- `provider`
+- `source`
+
+The Router MUST always constrain the Reference Memory lane to
+`memory_type = reference_memory`. For each supplied `reference_filters` entry,
+the Router MUST add an exact-match condition on the corresponding Reference
+Memory metadata field. Unknown filter keys MUST be rejected at request
+validation time.
+
+If `reference_filters` is absent or empty, the Router MUST NOT synthesize
+product, version, scope, provider, source, or other metadata narrowing. This
+preserves generic retrieval for callers that do not know product context.
+Callers that do know product/version context SHOULD supply it explicitly.
+
+For the v1 agent retrieval contract, this amendment supersedes Section 6.1
+gate 4 only with respect to requiring product/version narrowing before a
+reference search may execute. All other Reference Memory isolation, attribution,
+mode-gating, and token-budget invariants remain unchanged.
+
+---
+
 **END OF DOCUMENT 03**

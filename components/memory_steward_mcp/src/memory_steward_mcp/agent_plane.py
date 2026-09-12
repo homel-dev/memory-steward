@@ -25,6 +25,7 @@ def register_agent_tools(mcp: FastMCP) -> None:
         query: Optional[str] = None,
         mode: Optional[str] = None,
         artifact_selectors: Optional[list[dict[str, Any]]] = None,
+        reference_filters: Optional[dict[str, str]] = None,
     ) -> str:
         """Retrieve governed structured context for an agent task."""
         payload: dict[str, Any] = {}
@@ -34,6 +35,8 @@ def register_agent_tools(mcp: FastMCP) -> None:
             payload["mode"] = mode
         if artifact_selectors:
             payload["artifact_selectors"] = artifact_selectors
+        if reference_filters is not None:
+            payload["reference_filters"] = reference_filters
         response = requests.post(
             f"{MEMORY_ROUTER_URL}/v1/context/retrieve",
             headers={"X-Project-ID": project_id},

@@ -273,3 +273,14 @@ class TestAgentContextRetrieve:
         assert body["selected_items"][0]["id"] == "point-1"
         assert body["context_request_id"]
         post.assert_not_called()
+
+    def test_unknown_reference_filter_returns_422(self):
+        resp = client.post(
+            "/v1/context/retrieve",
+            headers={"X-Project-ID": "agent-project"},
+            json={
+                "query": "inspect auth flow",
+                "reference_filters": {"project_id": "internal"},
+            },
+        )
+        assert resp.status_code == 422

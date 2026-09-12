@@ -18,7 +18,7 @@ import requests
 import tiktoken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sklearn.metrics.pairwise import cosine_similarity
 
 from memory_router.mcp_bridge import handle_glap
@@ -231,12 +231,36 @@ class ArtifactSelector(BaseModel):
     content_hash: Optional[str] = Field(default=None, max_length=64)
 
 
+REFERENCE_FILTER_FIELDS: Dict[str, str] = {
+    "product": "product",
+    "version": "version",
+    "scope": "scope",
+    "provider": "provider",
+    "source": "source",
+}
+
+
 class ContextRetrieveRequest(BaseModel):
     query: Optional[str] = Field(default=None, min_length=1)
     mode: Optional[str] = None
     model: Optional[str] = None
     recent_messages: List[ChatMessage] = Field(default_factory=list)
     artifact_selectors: List[ArtifactSelector] = Field(default_factory=list, max_length=32)
+    reference_filters: dict[str, str] | None = None
+
+    @field_validator("reference_filters")
+    @classmethod
+    def validate_reference_filters(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        unknown = sorted(set(value) - set(REFERENCE_FILTER_FIELDS))
+        if unknown:
+            raise ValueError(
+                f"unsupported reference filter(s): {', '.join(unknown)}"
+            )
+        return value
 
 
 class StaticUpsert(BaseModel):
@@ -549,7 +573,11 @@ REFERENCE_RETRIEVAL_ENABLED = _opt("REFERENCE_RETRIEVAL_ENABLED", "1").strip() i
 REFERENCE_MODES = {"engineering", "implementation", "formal_spec"}
 
 
-def _qdrant_reference(vec: List[float], limit: int, scope: Optional[str] = None) -> List[Candidate]:
+def _qdrant_reference(
+    vec: List[float],
+    limit: int,
+    reference_filters: dict[str, str] | None = None,
+) -> List[Candidate]:
     """Retrieve reference memory.
 
     Reference chunks carry no project_id (Doc 03: reference is namespaced by
@@ -557,16 +585,23 @@ def _qdrant_reference(vec: List[float], limit: int, scope: Optional[str] = None)
     never surface them. This path filters on memory_type instead, making ingested
     reference docs retrievable by the chat flow.
 
-    NOTE: product/version disambiguation (Doc 03 §6.1 gate 4) is not enforced here
-    because the Router currently has no product signal; ranking is left to vector
-    similarity + MMR. Passing product/version (via request or project profile) is
-    the correct follow-up to fully satisfy the gate.
+    Optional reference_filters narrow the canonical reference namespace using
+    only the public v1 whitelist. With no filters, retrieval remains generic.
     """
     must: List[Dict[str, Any]] = [
         {"key": "memory_type", "match": {"value": "reference_memory"}}
     ]
-    if scope:
-        must.append({"key": "scope", "match": {"value": scope}})
+
+    filters = reference_filters or {}
+    unknown = sorted(set(filters) - set(REFERENCE_FILTER_FIELDS))
+    if unknown:
+        raise ValueError(
+            f"unsupported reference filter(s): {', '.join(unknown)}"
+        )
+    for field, value in filters.items():
+        must.append(
+            {"key": REFERENCE_FILTER_FIELDS[field], "match": {"value": value}}
+        )
 
     payload = {
         "vector": {"name": "dense", "vector": vec},
@@ -761,6 +796,7 @@ def _retrieve_context_structured(
     model: str,
     mode: Optional[str] = None,
     artifact_selectors: Optional[List[ArtifactSelector]] = None,
+    reference_filters: dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     """Canonical retrieval operation shared by chat and AMP agent retrieval."""
     with telemetry.step(request_id=request_id, project_id=project_id, name="pg_static"):
@@ -793,7 +829,11 @@ def _retrieve_context_structured(
             with telemetry.step(
                 request_id=request_id, project_id=project_id, name="qdrant_reference"
             ):
-                ref_candidates = _qdrant_reference(query_vec, DENSE_PREFETCH)
+                ref_candidates = _qdrant_reference(
+                    query_vec,
+                    DENSE_PREFETCH,
+                    reference_filters=reference_filters,
+                )
             raw_candidates = ref_candidates + raw_candidates
 
         reranked = _maximal_marginal_relevance(
@@ -1040,6 +1080,7 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
             model=model,
             mode=req.mode,
             artifact_selectors=req.artifact_selectors,
+            reference_filters=req.reference_filters,
         )
         a = retrieval["accounting"]
         telemetry.retrieval_write(
