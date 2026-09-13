@@ -263,6 +263,26 @@ class ContextRetrieveRequest(BaseModel):
         return value
 
 
+class ReferenceSearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    reference_filters: dict[str, str] | None = None
+    limit: int = Field(default=8, ge=1, le=50)
+
+    @field_validator("reference_filters")
+    @classmethod
+    def validate_reference_filters(
+        cls, value: dict[str, str] | None
+    ) -> dict[str, str] | None:
+        if value is None:
+            return None
+        unknown = sorted(set(value) - set(REFERENCE_FILTER_FIELDS))
+        if unknown:
+            raise ValueError(
+                f"unsupported reference filter(s): {', '.join(unknown)}"
+            )
+        return value
+
+
 class StaticUpsert(BaseModel):
     project_id: str = Field(..., min_length=1)
     key: str = Field(..., min_length=1)
@@ -279,6 +299,7 @@ class Candidate:
     vector: List[float]
     metadata: Dict[str, Any]
     token_count: int = 0
+    score: Optional[float] = None
 
 
 # ------------------------------------------------------------------------------
@@ -634,9 +655,11 @@ def _qdrant_reference(
 
             # Force routing into the system_ontology block (the stitch step sends
             # any candidate whose namespace contains "reference"/"doc"/"spec" there).
+            reference_source = md.get("source")
             md = {
                 **md,
                 "namespace": "reference",
+                "reference_source": reference_source,
                 "source": f'{md.get("product", "ref")}@{md.get("version", "?")}',
             }
             candidates.append(
@@ -646,6 +669,7 @@ def _qdrant_reference(
                     vector=list(vector),
                     metadata=md,
                     token_count=0,
+                    score=res.get("score"),
                 )
             )
         return candidates
@@ -655,6 +679,64 @@ def _qdrant_reference(
             log.warning("Qdrant collection missing, skipping reference recall")
             return []
         raise
+
+
+def _reference_candidate_payload(candidate: Candidate) -> Dict[str, Any]:
+    """Return one agent-facing Reference Memory search result."""
+    md = candidate.metadata or {}
+    return {
+        "id": candidate.id,
+        "score": candidate.score,
+        "memory_type": md.get("memory_type"),
+        "content": candidate.content,
+        "product": md.get("product"),
+        "version": md.get("version"),
+        "scope": md.get("scope"),
+        "provider": md.get("provider"),
+        "source": md.get("reference_source", md.get("source")),
+        "doc_section": md.get("doc_section"),
+        "ref_key": md.get("ref_key"),
+        "chunk_index": md.get("chunk_index"),
+        "ingested_at": md.get("ingested_at"),
+    }
+
+
+def _qdrant_reference_get(chunk_id: str) -> Optional[Dict[str, Any]]:
+    """Exact-read one Reference Memory point by stable Qdrant point id."""
+    payload = {
+        "ids": [chunk_id],
+        "with_payload": True,
+        "with_vector": False,
+    }
+    r = requests.post(
+        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points",
+        json=payload,
+        timeout=30,
+    )
+    r.raise_for_status()
+    points = r.json().get("result", []) or []
+    if not points:
+        return None
+
+    point = points[0]
+    md = point.get("payload") or {}
+    if md.get("memory_type") != "reference_memory":
+        return None
+
+    return {
+        "id": str(point.get("id")),
+        "memory_type": md.get("memory_type"),
+        "content": md.get("content"),
+        "product": md.get("product"),
+        "version": md.get("version"),
+        "scope": md.get("scope"),
+        "provider": md.get("provider"),
+        "source": md.get("source"),
+        "doc_section": md.get("doc_section"),
+        "ref_key": md.get("ref_key"),
+        "chunk_index": md.get("chunk_index"),
+        "ingested_at": md.get("ingested_at"),
+    }
 
 
 def _maximal_marginal_relevance(
@@ -1050,6 +1132,32 @@ def list_models():
             }
         ],
     }
+
+
+@app.post("/v1/reference/search")
+def reference_search(req: ReferenceSearchRequest, http_req: Request):
+    pid = _project_id(http_req)
+    query_vec = _embed_one(req.query)
+    candidates = _qdrant_reference(
+        query_vec,
+        req.limit,
+        reference_filters=req.reference_filters,
+    )
+    return {
+        "project_id": pid,
+        "query": req.query,
+        "reference_filters": req.reference_filters or {},
+        "items": [_reference_candidate_payload(candidate) for candidate in candidates],
+    }
+
+
+@app.get("/v1/reference/{chunk_id}")
+def reference_get(chunk_id: str, http_req: Request):
+    pid = _project_id(http_req)
+    item = _qdrant_reference_get(chunk_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="reference chunk not found")
+    return {"project_id": pid, **item}
 
 
 @app.post("/v1/context/retrieve")

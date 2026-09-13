@@ -45,6 +45,35 @@ def register_agent_tools(mcp: FastMCP) -> None:
         )
         return _json_response(response)
 
+    @mcp.tool(name="memory.reference.search")
+    def reference_search(
+        project_id: str,
+        query: str,
+        reference_filters: Optional[dict[str, str]] = None,
+        limit: int = 8,
+    ) -> str:
+        """Search read-only canonical Reference Memory for an agent task."""
+        payload: dict[str, Any] = {"query": query, "limit": limit}
+        if reference_filters is not None:
+            payload["reference_filters"] = reference_filters
+        response = requests.post(
+            f"{MEMORY_ROUTER_URL}/v1/reference/search",
+            headers={"X-Project-ID": project_id},
+            json=payload,
+            timeout=60,
+        )
+        return _json_response(response)
+
+    @mcp.tool(name="memory.reference.get")
+    def reference_get(project_id: str, chunk_id: str) -> str:
+        """Fetch one full Reference Memory chunk by stable chunk id."""
+        response = requests.get(
+            f"{MEMORY_ROUTER_URL}/v1/reference/{chunk_id}",
+            headers={"X-Project-ID": project_id},
+            timeout=30,
+        )
+        return _json_response(response)
+
     @mcp.tool(name="memory.submit_agent_outcome")
     def submit_agent_outcome(
         project_id: str,

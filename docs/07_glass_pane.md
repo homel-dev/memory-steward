@@ -128,6 +128,8 @@ Tools to manipulate what the system “knows.”
 |:-----------------|:--------------------------|:----------------------------------------------------------------|
 |`ingest_reference`|`url`, `product`, `version`|Scrapes, validates, and indexes new documentation.               |
 |`inspect_memory`  |`query`, `namespace`       |Debug tool to perform raw vector search and see retrieved chunks.|
+|`memory.reference.search`|`project_id`, `query`, `reference_filters`, `limit`|Read-only semantic search over canonical Reference Memory. `project_id` is request correlation only; Reference Memory itself is not project-scoped.|
+|`memory.reference.get`|`project_id`, `chunk_id`|Read-only exact fetch of one full Reference Memory chunk by stable chunk ID. Non-reference points are not returned.|
 |`static_update`   |`layer`, `content`         |Overwrites `static_global` or `static_mode_conditioned` text.    |
 |`ref_purge` |`namespace`                |**Destructive.** Removes a specific versioned knowledge base.    |
 
