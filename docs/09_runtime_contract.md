@@ -223,4 +223,37 @@ The frontend component has been replaced from AnythingLLM to **Open WebUI**. All
 
 -----
 
+## Amendment 09.2: Shared Observability Presentation via OCO
+
+**Date:** 2026-09-12
+**Scope:** Section 5 and Kubernetes deployment ownership
+
+Memory Steward no longer owns or deploys a Grafana viewer. The shared presentation surface is provided by `homel-dev/OCO` in namespace `observability-console`. Memory Steward remains the owner of telemetry semantics, storage, datasource definitions, and dashboard content.
+
+The project publishes the OCO consumer contract from `k8s/oco-consumer/` in namespace `ms`:
+
+- a ConfigMap labeled `grafana_datasource=1` containing datasource `memory-steward-postgres`;
+- eight ConfigMaps labeled `grafana_dashboard=1` containing the Memory Steward observability suite;
+- a namespaced Role granting `get`, `list`, and `watch` on ConfigMaps;
+- a RoleBinding granting that Role to ServiceAccount `observability-console` in namespace `observability-console`.
+
+The datasource uses `postgres.ms.svc.cluster.local:5432` because Grafana runs outside namespace `ms`. Datasource UID and every provisioning data key are prefixed with `memory-steward-` because OCO merges definitions from multiple consumer namespaces into one Grafana instance and one provisioning directory.
+
+The canonical dashboard suite is:
+
+1. `Memory Steward — Executive Overview`
+1. `Memory Steward — Request Pipeline`
+1. `Memory Steward — Retrieval Quality`
+1. `Memory Steward — Admission Control`
+1. `Memory Steward — Memory & Reference`
+1. `Memory Steward — AMP & Feedback`
+1. `Memory Steward — Operations & Configuration`
+1. `Memory Steward — Request Trace`
+
+Dashboard SQL MUST use the canonical current schema (`telemetry.request`, `telemetry.step`, `telemetry.retrieval`, `telemetry.admission`, admission-control telemetry, AMP telemetry, and current content-plane tables). Dashboards MUST NOT depend on undeclared compatibility views.
+
+Memory Steward MUST NOT deploy a Grafana Deployment, Service, or ServiceAccount. Removing OCO may remove visibility, but MUST NOT remove Memory Steward telemetry or storage.
+
+-----
+
 **END OF DOCUMENT 09**

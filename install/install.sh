@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_NAME="memory-steward-installer"
 REPO_URL="https://github.com/homel-dev/memory-steward.git"
-DEFAULT_NAMESPACE="homel"
+DEFAULT_NAMESPACE="ms"
 MINIKUBE_PROFILE="minikube"
 
 die() { echo "[ERROR] $*" >&2; exit 1; }
@@ -52,7 +52,8 @@ apply_manifests() {
   # Apply everything canonical (keeps repo as source of truth)
   kubectl apply -n "$DEFAULT_NAMESPACE" -f k8s/
   kubectl apply -n "$DEFAULT_NAMESPACE" -f k8s/vector/ 2>/dev/null || true
-  kubectl apply -n "$DEFAULT_NAMESPACE" -f k8s/grafana/ 2>/dev/null || true
+  kubectl delete -n "$DEFAULT_NAMESPACE" deployment/grafana service/grafana serviceaccount/grafana role/grafana-read-configmaps rolebinding/grafana-read-configmaps --ignore-not-found
+  kubectl apply -k k8s/oco-consumer/
 
   # Ingress routing (enabled by default per your decision)
   kubectl apply -n "$DEFAULT_NAMESPACE" -f k8s/ingress.yaml

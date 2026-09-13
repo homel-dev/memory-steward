@@ -75,7 +75,8 @@ tasks:
       - kubectl apply -f k8s/tooling/
       - kubectl apply -f k8s/backup/
       - kubectl apply -f k8s/vector/
-      - kubectl apply -f k8s/grafana/
+      - kubectl delete -n {{.NAMESPACE}} deployment/grafana service/grafana serviceaccount/grafana role/grafana-read-configmaps rolebinding/grafana-read-configmaps --ignore-not-found
+      - kubectl apply -k k8s/oco-consumer/
 
   k8s:wait:
     desc: "Block until core services are Ready"
