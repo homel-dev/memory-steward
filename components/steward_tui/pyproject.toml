@@ -1,0 +1,32 @@
+# components/steward_tui/pyproject.toml
+[project]
+name = "steward-tui"
+version = "0.1.0"
+description = "Terminal Glass Pane: operator TUI (MCP client) for Memory Steward"
+requires-python = ">=3.11"
+dependencies = [
+  "fastmcp>=3.0.0rc1",
+  "textual>=0.60",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+steward-tui = "steward_tui.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+addopts = "-q"
