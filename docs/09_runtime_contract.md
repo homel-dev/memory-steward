@@ -1,259 +1,173 @@
-# RUNTIME CONTRACT & OBSERVABILITY
-
-## Environment Variables, C4 Architecture, and Dashboards
-
-### Foundational Engineering Specification (Document 09 of 12)
-
+# RUNTIME CONTRACT
+## Kubernetes Topology, Service Configuration, and Operator Entry Points
+### Foundational Engineering Specification (Document 09 of 14)
 *Namespace: memory-steward • Owner: architecture-team*
 
------
+---
 
 ## Navigation
 
 **← [Prev: Document 08 (Verification)](08_verification.md) | [Next: Document 10 (Landscape)](10_industry_landscape.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. Purpose](#1-purpose)
-- [2. System Architecture (C4 Model)](#2-system-architecture-c4-model)
-- [3. Request Lifecycle (Sequence)](#3-request-lifecycle-sequence)
-- [4. Environment Variable Contract](#4-environment-variable-contract)
-- [5. Dashboard Specification](#5-dashboard-specification)
-- [7. Log Aggregation Component (Vector)](#7-log-aggregation-component-vector)
-- [8. Closing Statement](#8-closing-statement)
+- [1. Workloads](#1-workloads)
+- [2. Service Discovery](#2-service-discovery)
+- [3. Router Token Budget Contract](#3-router-token-budget-contract)
+- [4. Request Topology](#4-request-topology)
+- [5. Lifecycle](#5-lifecycle)
+- [6. Operator MCP Access](#6-operator-mcp-access)
+- [7. Images](#7-images)
+- [8. Observability](#8-observability)
+- [9. Closing Statement](#9-closing-statement)
 
------
+---
 
 ## 0. Status, Scope, and Authority
 
-**Status:** FOUNDATIONAL
-**Audience:** Core maintainers, operators
-**Change policy:**
+**Status:** IMPLEMENTED
+**Audience:** Maintainers, operators, platform engineers
+**Change policy:** Living implementation-aligned document; no silent behavioral drift.
 
-- Append-only
-- No silent edits
-
-[Back to top](#navigation)
-
------
-
-## 1. Purpose
-
-This document defines the **Physical Architecture** and **Runtime Configuration** of the system.
-It replaces ad-hoc READMEs with a strict contract.
+The Kubernetes namespace is `ms`.
 
 [Back to top](#navigation)
 
------
+---
 
-## 2. System Architecture (C4 Model)
+## 1. Workloads
 
-```mermaid
-graph TD
-    User((User))
+| Workload | Kind | Primary Port |
+| --- | --- | ---: |
+| `postgres` | StatefulSet | 5432 |
+| `qdrant` | StatefulSet | 6333 |
+| `embeddings` | Deployment | 8000 |
+| `memory-router` | Deployment | 8080 |
+| `memory-steward` | Deployment | 8090 |
+| `memory-steward-mcp` | Deployment | 8081 |
+| `memory-steward-list` | Deployment | 8001 |
+| `open-webui` | Deployment | 8080 |
+| `vector-agent` | DaemonSet | n/a |
 
-    subgraph "Memory Steward System"
-        UI[Open WebUI]
-        Router[<b>Memory Router</b><br>Orchestrator]
-        Steward[<b>Memory Steward</b><br>Admission Controller]
-        Builder[<b>Builder LLM</b><br>vLLM / Inference]
-
-        subgraph "Storage"
-            DB[(Postgres<br>Canonical)]
-            Vector[(Qdrant<br>Index)]
-            Logs[(Log Sink<br>PVC)]
-        end
-    end
-
-    User -->|Chat| UI
-    UI -->|OpenAI Protocol| Router
-    Router -->|Inference| Builder
-    Router -->|Read Static| DB
-    Router -->|Search| Vector
-
-    Router -.->|Async Admit| Steward
-    Steward -->|Write Dynamic| DB
-    Steward -->|Upsert| Vector
-
-    Router -.->|Logs| Logs
-    Steward -.->|Logs| Logs
-```
+OCO is external to this namespace's application workloads; Memory Steward publishes OCO consumer ConfigMaps/RBAC.
 
 [Back to top](#navigation)
 
------
+---
 
-## 3. Request Lifecycle (Sequence)
+## 2. Service Discovery
 
-```mermaid
+Application manifests primarily use Kubernetes service-environment variables and the shared `homel-runtime-contract` ConfigMap.
+
+Important current values include:
+
+- `MCP_URL=http://memory-steward-mcp:8081/mcp`
+- `MEMORY_ROUTER_URL=http://memory-router:8080`
+- `QDRANT_COLLECTION=homel_memory`
+
+Router/Steward code also requires Postgres credentials and service host/port variables injected by Kubernetes/manifests.
+
+The checked-in ConfigMap also contains `STATIC_MEMORY_REFRESH_SECONDS` for the MCP-local cache and `HYSTERESIS_WINDOW` as a compatibility/diagnostics value. `HYSTERESIS_WINDOW` MUST NOT be described as an active request-policy control. Stale keys with no code consumer are removed rather than documented as runtime behavior.
+
+Do not document generic environment variable aliases unless the code reads them.
+
+[Back to top](#navigation)
+
+---
+
+## 3. Router Token Budget Contract
+
+The checked-in runtime contract sets:
+
+- `MAX_CONTEXT_TOKENS=128000` — upper bound for injected static/dynamic/reference context;
+- `MAX_TOTAL_TOKENS=262144` — Router prompt-input planning ceiling used when pruning chat history.
+
+`MAX_TOTAL_TOKENS` MUST remain greater than the maximum context budget. The current manifest selects `gpt-5.2`; if the Builder model/provider changes, both token limits MUST be revalidated against that provider/model before deployment.
+
+Full prompt logging is disabled by default (`DEBUG_PROMPTS=false`) because assembled prompts may contain user text and retrieved memory.
+
+[Back to top](#navigation)
+
+---
+
+## 4. Request Topology
+
+~~~mermaid
 sequenceDiagram
-    participant U as User
+    participant C as Client
     participant R as Router
+    participant E as Embeddings
+    participant P as Postgres
     participant Q as Qdrant
     participant B as Builder
     participant S as Steward
 
-    U->>R: POST /chat/completions
-    par Retrieval
-        R->>Q: Search (Project ID)
-        R->>R: Load Static Rules
-    end
-    R->>R: Assemble Context
-    R->>B: Generate(Prompt)
-    B-->>R: Response
-    R-->>U: Response
-
-    rect rgb(240, 240, 240)
-        Note right of R: Async Admission
-        R->>S: Admit(User + Assistant Msg)
-        S->>S: Extract Fragments
-        S->>Q: Upsert Vector
-    end
-```
+    C->>R: /v1/chat/completions
+    R->>P: static/artifact reads
+    R->>E: embed query
+    R->>Q: dynamic/reference search
+    R->>B: Builder request
+    B-->>R: response
+    R-->>C: response
+    R-->>S: async /admit
+    S->>P: admitted state
+    S->>Q: dynamic index
+~~~
 
 [Back to top](#navigation)
 
------
+---
 
-## 4. Environment Variable Contract
+## 5. Lifecycle
 
-### 4.1 Memory Router
+~~~bash
+task up
+task ops:service:wait
+task ops:service:status
+task ops:service:restart
+task down
+~~~
 
-|Variable            |Default                 |Description                                                                                              |
-|:-------------------|:-----------------------|:--------------------------------------------------------------------------------------------------------|
-|`POSTGRES_DSN`      |*Required*              |Canonical storage connection.                                                                            |
-|`QDRANT_URL`        |`http://qdrant:6333`    |Vector store endpoint.                                                                                   |
-|`BUILDER_BASE_URL`  |*Required*              |vLLM / OpenAI inference endpoint.                                                                        |
-|`STEWARD_URL`       |*Required*              |Async admission endpoint.                                                                                |
-|`MAX_CONTEXT_TOKENS`|`2000`                  |Safety cap for injection.                                                                                |
-|`OPEN_WEBUI_URL`    |`http://open-webui:8080`|Open WebUI base URL for slash-command seeding.                                                           |
-|`OPEN_WEBUI_API_KEY`|*Optional*              |Open WebUI API key. Required for `/glap` slash-command auto-seeding. Set via `open-webui-api-key` secret.|
+Stateful restarts are explicit, prompted operations:
 
-### 4.2 Memory Steward
-
-|Variable        |Default   |Description                      |
-|:---------------|:---------|:--------------------------------|
-|`MIN_CONFIDENCE`|`0.7`     |Threshold for memory persistence.|
-|`EMBEDDINGS_URL`|*Required*|Service for vectorization.       |
-
-### 4.3 Log Aggregator (Vector) [New]
-
-|Variable                |Default                       |Description                             |
-|:-----------------------|:-----------------------------|:---------------------------------------|
-|`LOG_DIR`               |`/var/log/memory_steward_logs`|Root directory for persisted logs.      |
-|`LOG_ROTATE_MAX_SIZE_MB`|`10`                          |Size threshold for rotation.            |
-|`LOG_ROTATE_MAX_FILES`  |`10`                          |Max rotated files per log.              |
-|`LOG_RETENTION_DAYS`    |`14`                          |Age horizon for purge.                  |
-|`LOG_TOTAL_CAP_MB`      |`5120`                        |Global cap for all logs under `LOG_DIR`.|
-
-### 4.4 MCP Diagnostics [New]
-
-|Variable                |Default |Description                             |
-|:-----------------------|:-------|:---------------------------------------|
-|`MCP_MAX_LINES`         |`1000`  |Hard cap for `logs.read`.               |
-|`MCP_MAX_WINDOW_MINUTES`|`360`   |Hard cap for `smart_search` time window.|
-|`MCP_RESPONSE_MAX_BYTES`|`524288`|Response size ceiling (bytes).          |
+~~~bash
+task ops:storage:restart:postgres
+task ops:storage:restart:qdrant
+~~~
 
 [Back to top](#navigation)
 
------
+---
 
-## 5. Dashboard Specification
+## 6. Operator MCP Access
 
-Dashboards are powered by the **Diagnostics Plane** (Postgres `telemetry` schema).
-
-### 5.1 Grafana Views (Canonical)
-
-1. **Router Overview:** RPS, Error Rate, Latency (p95).
-1. **Steward Health:** Admission Lag, Fragments Inserted per Minute.
-1. **Retrieval Quality:** “Zero Candidate” rate (Blind spots).
-
-### 5.2 Verification
-
-```sql
--- Check if telemetry is flowing
-SELECT count(*) FROM telemetry.request WHERE created_at > now() - interval '1 hour';
-```
+MCP remains cluster-internal. Use `kubectl exec` through Task wrappers or a loopback-only port-forward; do not add a public ingress for routine administration.
 
 [Back to top](#navigation)
 
------
+---
 
-## 7. Log Aggregation Component (Vector)
+## 7. Images
 
-**Component name:** `vector-agent` (DaemonSet)
-
-**Purpose:** Harvest all container logs, persist to PVC, enforce rotation and retention, and expose bounded diagnostics via MCP.
-
-**Contracts**
-
-- **Directories**
-  - `LOG_DIR` (default `/var/log/memory_steward_logs`)
-- **Rotation / Retention**
-  - `LOG_ROTATE_MAX_SIZE_MB` (default **10**)
-  - `LOG_ROTATE_MAX_FILES` (default **10**)
-  - `LOG_RETENTION_DAYS` (default **14**)
-  - `LOG_TOTAL_CAP_MB` (default **5120**)
-- **Time**
-  - `LOG_TZ` (default cluster timezone) for timestamp normalization
-
-**Kubernetes Resources**
-
-- **DaemonSet:** `vector-agent`
-- **ConfigMap:** `vector-config` (immutable pipeline and retention rules)
-- **PVC:** `vector-logs` (ReadWriteOnce) mounted at `LOG_DIR`
-- **ServiceAccount:** `vector-agent` (read pod metadata only)
+Current manifests contain a mix of fixed and floating image tags. This document does not claim reproducible image pinning where the manifests do not provide it. A production deployment that requires reproducibility SHOULD pin immutable tags/digests as a separate verified change.
 
 [Back to top](#navigation)
 
------
+---
 
-## 8. Closing Statement
+## 8. Observability
 
-This runtime contract ensures that deployment is deterministic.
-If the Env Vars match, the C4 architecture holds true.
+Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns shared Grafana presentation. Vector is the log collector. Removing OCO affects visualization, not canonical Memory Steward storage.
 
------
+[Back to top](#navigation)
 
-## Amendment 09.1: Open WebUI Frontend
+---
 
-**Date:** 2026
-**Scope:** Sections 2, 3, 4.1
+## 9. Closing Statement
 
-The frontend component has been replaced from AnythingLLM to **Open WebUI**. All references to `AnythingLLM / UI` in the C4 diagram and sequence diagram now refer to `Open WebUI`. Two new environment variables have been added to the Memory Router contract (`OPEN_WEBUI_URL`, `OPEN_WEBUI_API_KEY`) to support lazy slash-command seeding via `mcp_bridge.py`. The `open-webui` service is added to the log aggregation file layout (see Doc 06 Section 11.2).
+This document is the implementation-aligned Kubernetes and runtime contract. Namespace, workloads, service discovery, lifecycle tasks, and observability ownership MUST match the manifests and Taskfiles in the same tree.
 
------
+[Back to top](#navigation)
 
-## Amendment 09.2: Shared Observability Presentation via OCO
-
-**Date:** 2026-09-12
-**Scope:** Section 5 and Kubernetes deployment ownership
-
-Memory Steward no longer owns or deploys a Grafana viewer. The shared presentation surface is provided by `homel-dev/OCO` in namespace `observability-console`. Memory Steward remains the owner of telemetry semantics, storage, datasource definitions, and dashboard content.
-
-The project publishes the OCO consumer contract from `k8s/oco-consumer/` in namespace `ms`:
-
-- a ConfigMap labeled `grafana_datasource=1` containing datasource `memory-steward-postgres`;
-- eight ConfigMaps labeled `grafana_dashboard=1` containing the Memory Steward observability suite;
-- a namespaced Role granting `get`, `list`, and `watch` on ConfigMaps;
-- a RoleBinding granting that Role to ServiceAccount `observability-console` in namespace `observability-console`.
-
-The datasource uses `postgres.ms.svc.cluster.local:5432` because Grafana runs outside namespace `ms`. Datasource UID and every provisioning data key are prefixed with `memory-steward-` because OCO merges definitions from multiple consumer namespaces into one Grafana instance and one provisioning directory.
-
-The canonical dashboard suite is:
-
-1. `Memory Steward — Executive Overview`
-1. `Memory Steward — Request Pipeline`
-1. `Memory Steward — Retrieval Quality`
-1. `Memory Steward — Admission Control`
-1. `Memory Steward — Memory & Reference`
-1. `Memory Steward — AMP & Feedback`
-1. `Memory Steward — Operations & Configuration`
-1. `Memory Steward — Request Trace`
-
-Dashboard SQL MUST use the canonical current schema (`telemetry.request`, `telemetry.step`, `telemetry.retrieval`, `telemetry.admission`, admission-control telemetry, AMP telemetry, and current content-plane tables). Dashboards MUST NOT depend on undeclared compatibility views.
-
-Memory Steward MUST NOT deploy a Grafana Deployment, Service, or ServiceAccount. Removing OCO may remove visibility, but MUST NOT remove Memory Steward telemetry or storage.
-
------
+---
 
 **END OF DOCUMENT 09**

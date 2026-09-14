@@ -1,25 +1,11 @@
 #!/usr/bin/env bash
-# scripts/migrate.sh
-#
-# Forward-only migration runner. Runs INSIDE the tooling image as an ephemeral
-# Job and connects DIRECTLY to Postgres via libpq env vars
-# (PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE). No kubectl, no host.
-#
-# Tracks applied files in schema_migrations (version = filename); applies only
-# files not yet recorded, each in its own transaction. Safe after a restore:
-# the dump already carries schema_migrations, so only newer files run.
-#
-# Migration files contain plain DDL. Whole-line BEGIN;/COMMIT; are stripped so
-# the runner owns one transaction per migration (file + bookkeeping = atomic).
-#
-# Usage: migrate.sh {up|status}
-
+# Forward-only migration runner. Runs inside the tooling image and connects
+# directly to Postgres through libpq environment variables.
 set -euo pipefail
 
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-/opt/tooling/migrations}"
 [ -d "$MIGRATIONS_DIR" ] || { echo "ERROR: migrations dir not found: $MIGRATIONS_DIR" >&2; exit 1; }
 
-# libpq env supplies the connection. ON_ERROR_STOP makes any failure fatal.
 psql_x() { psql -v ON_ERROR_STOP=1 "$@"; }
 
 ensure_table() {
@@ -29,6 +15,28 @@ ensure_table() {
       checksum   TEXT NOT NULL,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );" >/dev/null
+}
+
+normalize_legacy_versions() {
+  # Releases before the repository cleanup accidentally committed migration
+  # filenames 010..050 with a leading space. schema_migrations stores the
+  # filename verbatim, so normalizing the repository filenames without this
+  # compatibility step would make already-applied migrations appear pending.
+  psql_x -q -c "
+    WITH legacy AS (
+      SELECT version, ltrim(version) AS canonical
+      FROM schema_migrations
+      WHERE version <> ltrim(version)
+    )
+    UPDATE schema_migrations AS current
+       SET version = legacy.canonical
+      FROM legacy
+     WHERE current.version = legacy.version
+       AND NOT EXISTS (
+         SELECT 1
+           FROM schema_migrations AS canonical
+          WHERE canonical.version = legacy.canonical
+       );" >/dev/null
 }
 
 applied_versions() {
@@ -41,6 +49,8 @@ strip_txn() {
 
 cmd_up() {
   ensure_table
+  normalize_legacy_versions
+
   local applied ran=0 f v sum
   applied="$(applied_versions)"
   for f in "$MIGRATIONS_DIR"/*.sql; do
@@ -52,17 +62,25 @@ cmd_up() {
     {
       echo "BEGIN;"
       strip_txn "$f"
-      echo ""
-      echo "INSERT INTO schema_migrations (version, checksum) VALUES ('$v', '$sum');"
+      echo
+      printf "INSERT INTO schema_migrations (version, checksum) VALUES ('%s', '%s');\n" "$v" "$sum"
       echo "COMMIT;"
     } | psql_x >/dev/null
     ran=$((ran + 1))
+    applied="${applied}${applied:+$'\n'}${v}"
   done
-  if [ "$ran" -eq 0 ]; then echo "OK: already up to date"; else echo "OK: applied $ran migration(s)"; fi
+
+  if [ "$ran" -eq 0 ]; then
+    echo "OK: already up to date"
+  else
+    echo "OK: applied $ran migration(s)"
+  fi
 }
 
 cmd_status() {
   ensure_table
+  normalize_legacy_versions
+
   local applied f v
   applied="$(applied_versions)"
   for f in "$MIGRATIONS_DIR"/*.sql; do
@@ -77,7 +95,7 @@ cmd_status() {
 }
 
 case "${1:-up}" in
-  up)     cmd_up ;;
+  up) cmd_up ;;
   status) cmd_status ;;
   *) echo "usage: $0 {up|status}" >&2; exit 2 ;;
 esac

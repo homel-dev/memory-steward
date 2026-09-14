@@ -462,15 +462,18 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
 
     @mcp.tool(name="cache_control")
     def control_cache(action: str) -> str:
-        """[Cache] Manage the static memory cache.
-        action: 'refresh' (reload from Qdrant) or 'evict' (clear, force next-request reload)."""
+        """[Cache] Manage the MCP process-local StaticMemoryCacheManager.
+
+        This cache is not used by the Memory Router request path. `refresh`
+        reloads the MCP-local cache from Qdrant; `evict` clears that local cache.
+        """
         from memory_steward_mcp.cache import StaticMemoryCacheManager
         if action == "refresh":
             StaticMemoryCacheManager.refresh()
-            log.info("Operator action: CACHE_REFRESH")
-            return "✅ Static memory cache refreshed."
+            log.info("Operator action: CACHE_REFRESH scope=mcp-local")
+            return "✅ MCP-local static-memory cache refreshed. Router retrieval is unchanged."
         elif action == "evict":
             StaticMemoryCacheManager.evict_cache()
-            log.info("Operator action: CACHE_EVICT")
-            return "✅ Cache evicted — will reload on next request."
+            log.info("Operator action: CACHE_EVICT scope=mcp-local")
+            return "✅ MCP-local cache evicted. Router retrieval is unchanged."
         return f"Unknown action '{action}'. Must be 'refresh' or 'evict'."

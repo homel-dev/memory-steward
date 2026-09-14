@@ -1,176 +1,50 @@
 from __future__ import annotations
 
-# components/memory_router/src/memory_router/server.py
-
-import hashlib
 import json
 import logging
-import os
-import threading
 import time
 import uuid
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional
 
-import numpy as np
-import psycopg
 import requests
-import tiktoken
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field, field_validator
-from sklearn.metrics.pairwise import cosine_similarity
 
+import memory_router.request_context as request_context_core
+import memory_router.retrieval as retrieval_core
+import memory_router.schemas as schemas_core
+import memory_router.upstream as upstream_core
+from memory_router import config
 from memory_router.mcp_bridge import handle_glap
-from memory_router.telemetry import TelemetryWriter
-
-# ------------------------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------------------------
-
-
-def _req(name: str) -> str:
-    v = os.environ.get(name)
-    if not v:
-        raise RuntimeError(f"Missing required env var: {name}")
-    return v
-
-
-def _opt(name: str, default: str = "") -> str:
-    return os.environ.get(name, default)
-
-
-def _svc_url(host_env: str, port_env: str, scheme: str = "http") -> str:
-    host = _req(host_env)
-    port = _req(port_env)
-    return f"{scheme}://{host}:{port}"
-
-
-POSTGRES_HOST = _req("POSTGRES_SERVICE_HOST")
-POSTGRES_PORT = _req("POSTGRES_SERVICE_PORT")
-POSTGRES_USER = _req("POSTGRES_USER")
-POSTGRES_PASSWORD = _req("POSTGRES_PASSWORD")
-POSTGRES_DB = _req("POSTGRES_DB")
-POSTGRES_SSLMODE = _opt("POSTGRES_SSLMODE", "disable")
-POSTGRES_APPNAME = _opt("POSTGRES_APPLICATION_NAME", "memory-router")
-
-POSTGRES_DSN = (
-    f"postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
-    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
-    f"?sslmode={POSTGRES_SSLMODE}&application_name={POSTGRES_APPNAME}"
+from memory_router.request_context import (
+    glap_stream_generator as _glap_stream_generator,
+    origin_base as _origin_base,
+    project_id as _project_id,
 )
-
-QDRANT_URL = _svc_url("QDRANT_SERVICE_HOST", "QDRANT_SERVICE_PORT")
-EMBEDDINGS_URL = _svc_url("EMBEDDINGS_SERVICE_HOST", "EMBEDDINGS_SERVICE_PORT")
-QDRANT_COLLECTION = _req("QDRANT_COLLECTION")
-
-BUILDER_BASE_URL = os.environ.get("BUILDER_BASE_URL")
-if not BUILDER_BASE_URL:
-    BUILDER_BASE_URL = _svc_url(
-        "VLLM_BUILDER_SERVICE_HOST", "VLLM_BUILDER_SERVICE_PORT"
-    )
-BUILDER_API_KEY = _opt("BUILDER_API_KEY", "local-token")
-
-STEWARD_URL = _svc_url("MEMORY_STEWARD_SERVICE_HOST", "MEMORY_STEWARD_SERVICE_PORT")
-BUILDER_MODEL = _req("BUILDER_MODEL")
-
-MAX_CONTEXT_TOKENS = int(_opt("MAX_CONTEXT_TOKENS", "8192"))
-MAX_TOTAL_TOKENS = int(_opt("MAX_TOTAL_TOKENS", "16384"))
-RECENCY_HALF_LIFE_SECONDS = int(_opt("RECENCY_HALF_LIFE_SECONDS", str(7 * 24 * 3600)))
-DENSE_PREFETCH = int(_opt("DENSE_PREFETCH", "25"))
-TOP_K = int(_opt("TOP_K", "8"))
-
-MMR_LAMBDA = float(
-    _opt("MMR_LAMBDA", "0.5")
-)  # 0.5 = Balance between Relevance and Diversity
-
-# Avoid raw print() in request path
-DEBUG_PROMPTS = _opt("DEBUG_PROMPTS", "0").strip() in (
-    "1",
-    "true",
-    "TRUE",
-    "yes",
-    "YES",
+from memory_router.retrieval import (
+    count_tokens as _count_tokens,
+    embed_one as _embed_one,
+    pg_agent_reference_load as _pg_agent_reference_load,
+    pg_static_load as _pg_static_load,
+    qdrant_dense as _qdrant_dense,
+    qdrant_reference as _qdrant_reference,
+    qdrant_reference_get as _qdrant_reference_get,
+    reference_candidate_payload as _reference_candidate_payload,
+    render_context_envelope as _render_context_envelope,
 )
-
-# Env value is now only the *default*. The live value may be overridden by the
-# stability plane (MCP config_set_budget), which writes runtime_config in Postgres.
-MAX_CONTEXT_TOKENS_DEFAULT = MAX_CONTEXT_TOKENS
-
-# ------------------------------------------------------------------------------
-# Runtime config (live, operator-tunable via the MCP stability plane)
-# ------------------------------------------------------------------------------
-# The stability plane writes keys into the Postgres `runtime_config` table.
-# Previously the Router only read env vars at import, so those writes were inert
-# (Doc 07 §8 "Atomic Config: changes take effect for the next request" was not
-# honored). We resolve the value at request time with a short TTL cache to honor
-# the contract without a DB hit on every request.
-#
-# Scope note: only Router-owned knobs are resolved here. FORCE_MODE and
-# HYSTERESIS_WINDOW are NOT consumed by the Router on purpose — per Doc 02 the
-# Router never infers or owns operational mode; those belong to the Steward.
-
-_RUNTIME_CFG_TTL_SECONDS = float(_opt("RUNTIME_CONFIG_TTL_SECONDS", "5"))
-_runtime_cfg_cache: Dict[str, str] = {}
-_runtime_cfg_expiry: float = 0.0
-_runtime_cfg_lock = threading.Lock()
-
-
-def _runtime_config_snapshot() -> Dict[str, str]:
-    """Return runtime_config as a dict, cached for _RUNTIME_CFG_TTL_SECONDS.
-    Best-effort: on any DB error we fall back to the last cache (or empty)."""
-    global _runtime_cfg_cache, _runtime_cfg_expiry
-    now = time.monotonic()
-    with _runtime_cfg_lock:
-        if now < _runtime_cfg_expiry:
-            return _runtime_cfg_cache
-    try:
-        with _pg() as conn, conn.cursor() as cur:
-            cur.execute("SELECT key, value FROM runtime_config")
-            snapshot = {k: v for (k, v) in cur.fetchall()}
-    except Exception as e:  # table missing, DB down, etc. — never block the request
-        log.warning("runtime_config read failed (using defaults): %s", e)
-        snapshot = _runtime_cfg_cache
-    with _runtime_cfg_lock:
-        _runtime_cfg_cache = snapshot
-        _runtime_cfg_expiry = time.monotonic() + _RUNTIME_CFG_TTL_SECONDS
-    return snapshot
-
-
-def _runtime_int(key: str, default: int) -> int:
-    raw = _runtime_config_snapshot().get(key)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        log.warning("runtime_config[%s]=%r is not an int; using default %d", key, raw, default)
-        return default
-
-
-def _effective_max_context_tokens() -> int:
-    return _runtime_int("MAX_CONTEXT_TOKENS", MAX_CONTEXT_TOKENS_DEFAULT)
-
-
-def _runtime_str(key: str, default: str) -> str:
-    """Resolve a string knob from runtime_config, falling back to the env default.
-    Empty string in the table is treated as 'unset' so a blank row never wins."""
-    raw = _runtime_config_snapshot().get(key)
-    return raw if raw else default
-
-
-def _effective_builder_base_url() -> str:
-    # Live override via runtime_config; the import-time env value is the default.
-    return _runtime_str("BUILDER_BASE_URL", BUILDER_BASE_URL)
-
-
-def _effective_builder_model() -> str:
-    # Live override via runtime_config; the import-time env value is the default.
-    return _runtime_str("BUILDER_MODEL", BUILDER_MODEL)
-
-# ------------------------------------------------------------------------------
-# Logging
-# ------------------------------------------------------------------------------
+from memory_router.schemas import (
+    ArtifactSelector,
+    ChatCompletionRequest,
+    ChatMessage,
+    ContextRetrieveRequest,
+    ReferenceSearchRequest,
+)
+from memory_router.state import telemetry
+from memory_router.upstream import (
+    async_admit as _async_admit,
+    builder_openai_url as _builder_openai_url,
+    get_builder_default_model as _get_builder_default_model,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -178,697 +52,42 @@ logging.basicConfig(
 )
 log = logging.getLogger("uvicorn.error")
 
-# ------------------------------------------------------------------------------
-# Telemetry
-# ------------------------------------------------------------------------------
+# Compatibility exports for internal tests and existing imports. Runtime values
+# themselves are owned by their focused modules.
+_sha256_hex = request_context_core.sha256_hex
+_extract_static_rules = retrieval_core.extract_static_rules
+_maximal_marginal_relevance = retrieval_core.maximal_marginal_relevance
+_normalize_builder_base = upstream_core.normalize_builder_base
+Candidate = schemas_core.Candidate
 
-telemetry = TelemetryWriter(POSTGRES_DSN)
 
-# ------------------------------------------------------------------------------
-# App
-# ------------------------------------------------------------------------------
+def _stitch_context_structured(
+    candidates, max_tokens: int, model: str
+):
+    """Compatibility wrapper that preserves the server-level token-count patch seam."""
+    return retrieval_core.stitch_context_structured(
+        candidates, max_tokens, model, count_fn=_count_tokens
+    )
+
+
+def _selected_candidate_refs(candidates, max_tokens: int, model: str):
+    """Compatibility wrapper that preserves the server-level token-count patch seam."""
+    return retrieval_core.selected_candidate_refs(
+        candidates, max_tokens, model, count_fn=_count_tokens
+    )
+
+BUILDER_MODEL = config.BUILDER_MODEL
+BUILDER_API_KEY = config.BUILDER_API_KEY
+DENSE_PREFETCH = config.DENSE_PREFETCH
+MAX_TOTAL_TOKENS = config.MAX_TOTAL_TOKENS
+REFERENCE_MODES = config.REFERENCE_MODES
+REFERENCE_RETRIEVAL_ENABLED = config.REFERENCE_RETRIEVAL_ENABLED
 
 app = FastAPI(
     title="homel-memory-router",
     version="0.3",
     description="Memory-augmenting OpenAI-compatible chat router (MMR + Stitching)",
 )
-
-
-class ChatMessage(BaseModel):
-    role: str
-    content: Union[str, List[Dict[str, Any]]]
-
-    @property
-    def text_content(self) -> str:
-        """Safely extracts text for router logic, ignoring base64 images/files"""
-        if isinstance(self.content, str):
-            return self.content
-        # If it's a multimodal list, join all the "text" elements
-        return " ".join(
-            [
-                item.get("text", "")
-                for item in self.content
-                if item.get("type") == "text"
-            ]
-        )
-
-
-class ChatCompletionRequest(BaseModel):
-    model: Optional[str] = None
-    messages: List[ChatMessage]
-    temperature: Optional[float] = None
-    stream: Optional[bool] = False
-    mode: Optional[str] = None
-
-
-class ArtifactSelector(BaseModel):
-    artifact_type: str = Field(..., min_length=1, max_length=128)
-    repository: Optional[str] = Field(default=None, max_length=1024)
-    revision: Optional[str] = Field(default=None, max_length=256)
-    schema_version: Optional[str] = Field(default=None, max_length=64)
-    producer_type: Optional[str] = Field(default=None, max_length=32)
-    content_hash: Optional[str] = Field(default=None, max_length=64)
-
-
-REFERENCE_FILTER_FIELDS: Dict[str, str] = {
-    "product": "product",
-    "version": "version",
-    "scope": "scope",
-    "provider": "provider",
-    "source": "source",
-}
-
-
-class ContextRetrieveRequest(BaseModel):
-    query: Optional[str] = Field(default=None, min_length=1)
-    mode: Optional[str] = None
-    model: Optional[str] = None
-    recent_messages: List[ChatMessage] = Field(default_factory=list)
-    artifact_selectors: List[ArtifactSelector] = Field(default_factory=list, max_length=32)
-    reference_filters: dict[str, str] | None = None
-
-    @field_validator("reference_filters")
-    @classmethod
-    def validate_reference_filters(
-        cls, value: dict[str, str] | None
-    ) -> dict[str, str] | None:
-        if value is None:
-            return None
-        unknown = sorted(set(value) - set(REFERENCE_FILTER_FIELDS))
-        if unknown:
-            raise ValueError(
-                f"unsupported reference filter(s): {', '.join(unknown)}"
-            )
-        return value
-
-
-class ReferenceSearchRequest(BaseModel):
-    query: str = Field(..., min_length=1)
-    reference_filters: dict[str, str] | None = None
-    limit: int = Field(default=8, ge=1, le=50)
-
-    @field_validator("reference_filters")
-    @classmethod
-    def validate_reference_filters(
-        cls, value: dict[str, str] | None
-    ) -> dict[str, str] | None:
-        if value is None:
-            return None
-        unknown = sorted(set(value) - set(REFERENCE_FILTER_FIELDS))
-        if unknown:
-            raise ValueError(
-                f"unsupported reference filter(s): {', '.join(unknown)}"
-            )
-        return value
-
-
-class StaticUpsert(BaseModel):
-    project_id: str = Field(..., min_length=1)
-    key: str = Field(..., min_length=1)
-    content: str = Field(..., min_length=1)
-    mode: str = "global"
-    is_active: bool = True
-    priority: int = 0
-
-
-@dataclass
-class Candidate:
-    id: str
-    content: str
-    vector: List[float]
-    metadata: Dict[str, Any]
-    token_count: int = 0
-    score: Optional[float] = None
-
-
-# ------------------------------------------------------------------------------
-# Utilities
-# ------------------------------------------------------------------------------
-
-
-def _sha256_hex(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-
-def _pg():
-    return psycopg.connect(POSTGRES_DSN)
-
-
-def _origin_base(req: Request) -> Optional[str]:
-    origin = req.headers.get("origin")
-    if origin:
-        return origin.strip()
-    referer = req.headers.get("referer")
-    if referer and "://" in referer:
-        scheme, rest = referer.split("://", 1)
-        host = rest.split("/", 1)[0]
-        return f"{scheme}://{host}"
-    if referer:
-        return referer.strip()
-    return None
-
-
-def _project_id(req: Request) -> str:
-    pid = req.headers.get("x-project-id")
-    if pid:
-        log.info("project_id.source=header value=%s", pid)
-        return pid
-
-    origin = req.headers.get("origin")
-    referer = req.headers.get("referer")
-    if origin or referer:
-        base = origin or referer
-        pid = _sha256_hex(base)[:16]
-        log.info("project_id.source=origin value=%s", pid)
-        return pid
-
-    auth = req.headers.get("authorization")
-    if auth:
-        pid = _sha256_hex(auth)[:16]
-        log.info("project_id.source=auth value=%s", pid)
-        return pid
-
-    log.warning("project_id.source=fallback")
-    return "backend-default"
-
-
-def _glap_stream_generator(content: str):
-    chunk_id = f"chatcmpl-glap-{uuid.uuid4().hex[:8]}"
-    ts = int(time.time())
-
-    yield (
-        "data: "
-        + json.dumps(
-            {
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": ts,
-                "model": "glap-mcp-bridge",
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"role": "assistant", "content": content},
-                        "finish_reason": None,
-                    }
-                ],
-            }
-        )
-        + "\n\n"
-    )
-
-    yield (
-        "data: "
-        + json.dumps(
-            {
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": ts,
-                "model": "glap-mcp-bridge",
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            }
-        )
-        + "\n\n"
-    )
-
-    yield "data: [DONE]\n\n"
-
-
-# ------------------------------------------------------------------------------
-# Token Counting
-# ------------------------------------------------------------------------------
-
-_tokenizer_cache: Dict[str, tiktoken.Encoding] = {}
-
-
-def _get_tokenizer(model: str) -> tiktoken.Encoding:
-    if model not in _tokenizer_cache:
-        try:
-            _tokenizer_cache[model] = tiktoken.encoding_for_model(model)
-        except KeyError:
-            _tokenizer_cache[model] = tiktoken.get_encoding("cl100k_base")
-    return _tokenizer_cache[model]
-
-
-def _count_tokens(model: str, text: str) -> int:
-    enc = _get_tokenizer(model)
-    return len(enc.encode(text))
-
-
-# ------------------------------------------------------------------------------
-# Static Memory (Postgres)
-# ------------------------------------------------------------------------------
-
-
-def _pg_static_load(mode: Optional[str] = None) -> List[Tuple[str, str, str]]:
-    rows: List[Tuple[str, str, str]] = []
-    with _pg() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id, content, mode
-            FROM static_memory
-            WHERE is_active = true
-              AND (mode = 'global' OR mode = %s)
-            ORDER BY
-              CASE WHEN mode = 'global' THEN 1 ELSE 2 END ASC,
-              created_at ASC
-            """,
-            (mode,),
-        )
-        for r_id, content, row_mode in cur.fetchall():
-            if content:
-                rows.append((str(r_id), str(content), str(row_mode)))
-    return rows
-
-
-def _extract_static_rules(
-    static_rows: List[Tuple[str, str, str]],
-) -> Dict[str, List[str]]:
-    rules = {"global": [], "mode": []}
-    for _, content, row_mode in static_rows:
-        clean_content = content.replace("\n", " ").strip()
-        if row_mode == "global":
-            rules["global"].append(clean_content)
-        else:
-            rules["mode"].append(clean_content)
-    return rules
-
-
-def _pg_agent_reference_load(
-    project_id: str, selectors: List[ArtifactSelector]
-) -> List[Dict[str, Any]]:
-    """Exact Postgres lookup for versioned structured AMP agent_reference artifacts."""
-    artifacts: List[Dict[str, Any]] = []
-    if not selectors:
-        return artifacts
-
-    with _pg() as conn, conn.cursor() as cur:
-        for selector in selectors:
-            where = ["project_id = %s", "artifact_type = %s"]
-            params: List[Any] = [project_id, selector.artifact_type]
-            for column, value in (
-                ("repository", selector.repository),
-                ("revision", selector.revision),
-                ("schema_version", selector.schema_version),
-                ("producer_type", selector.producer_type),
-                ("content_hash", selector.content_hash),
-            ):
-                if value is not None:
-                    where.append(f"{column} = %s")
-                    params.append(value)
-            cur.execute(
-                f"""
-                SELECT id, repository, revision, artifact_type, schema_version,
-                       producer_type, producer_name, producer_version, content_hash,
-                       payload, provenance, source_outcome_id, created_at
-                FROM agent_reference
-                WHERE {' AND '.join(where)}
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                params,
-            )
-            row = cur.fetchone()
-            if not row:
-                continue
-            payload = row[9]
-            provenance = row[10]
-            if isinstance(payload, str):
-                payload = json.loads(payload)
-            if isinstance(provenance, str):
-                provenance = json.loads(provenance)
-            artifacts.append(
-                {
-                    "id": str(row[0]),
-                    "repository": row[1],
-                    "revision": row[2],
-                    "artifact_type": row[3],
-                    "schema_version": row[4],
-                    "producer_type": row[5],
-                    "producer_name": row[6],
-                    "producer_version": row[7],
-                    "content_hash": row[8],
-                    "payload": payload,
-                    "provenance": provenance,
-                    "source_outcome_id": row[11],
-                    "created_at": row[12].isoformat() if hasattr(row[12], "isoformat") else str(row[12]),
-                }
-            )
-    return artifacts
-
-
-# ------------------------------------------------------------------------------
-# Memory Retrieval & Logic (UPGRADED)
-# ------------------------------------------------------------------------------
-
-
-def _embed_one(text: str) -> List[float]:
-    r = requests.post(
-        f"{EMBEDDINGS_URL}/embed",
-        json={"texts": [text], "normalize": True},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["vectors"][0]
-
-
-def _qdrant_dense(project_id: str, vec: List[float], limit: int) -> List[Candidate]:
-    payload = {
-        "vector": {"name": "dense", "vector": vec},
-        "limit": limit,
-        "with_payload": True,
-        "with_vector": True,
-        "filter": {
-            "must": [
-                {"key": "project_id", "match": {"value": project_id}},
-                {"key": "memory_type", "match": {"value": "dynamic_memory"}},
-            ]
-        },
-    }
-    try:
-        r = requests.post(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search",
-            json=payload,
-            timeout=30,
-        )
-        r.raise_for_status()
-        results = r.json().get("result", []) or []
-
-        candidates: List[Candidate] = []
-        for res in results:
-            content = (res.get("payload") or {}).get("content")
-            if not content:
-                continue
-
-            vector = res.get("vector")
-            if isinstance(vector, dict):
-                vector = vector.get("dense") or vector.get("vector")
-
-            if not vector:
-                continue
-
-            candidates.append(
-                Candidate(
-                    id=str(res.get("id")),
-                    content=str(content),
-                    vector=list(vector),
-                    metadata=res.get("payload") or {},
-                    token_count=0,
-                )
-            )
-
-        return candidates
-
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            log.warning("Qdrant collection missing, skipping dense recall")
-            return []
-        raise
-
-
-# Reference memory is gated by mode (Doc 02 §6.1 / Doc 03 §6.1): only retrieved
-# in rigor-oriented modes. Default-on because the safe-default mode is engineering.
-REFERENCE_RETRIEVAL_ENABLED = _opt("REFERENCE_RETRIEVAL_ENABLED", "1").strip() in (
-    "1", "true", "TRUE", "yes", "YES",
-)
-REFERENCE_MODES = {"engineering", "implementation", "formal_spec"}
-
-
-def _qdrant_reference(
-    vec: List[float],
-    limit: int,
-    reference_filters: dict[str, str] | None = None,
-) -> List[Candidate]:
-    """Retrieve reference memory.
-
-    Reference chunks carry no project_id (Doc 03: reference is namespaced by
-    product/version/scope, NOT by project), so the project-scoped dense path can
-    never surface them. This path filters on memory_type instead, making ingested
-    reference docs retrievable by the chat flow.
-
-    Optional reference_filters narrow the canonical reference namespace using
-    only the public v1 whitelist. With no filters, retrieval remains generic.
-    """
-    must: List[Dict[str, Any]] = [
-        {"key": "memory_type", "match": {"value": "reference_memory"}}
-    ]
-
-    filters = reference_filters or {}
-    unknown = sorted(set(filters) - set(REFERENCE_FILTER_FIELDS))
-    if unknown:
-        raise ValueError(
-            f"unsupported reference filter(s): {', '.join(unknown)}"
-        )
-    for field, value in filters.items():
-        must.append(
-            {"key": REFERENCE_FILTER_FIELDS[field], "match": {"value": value}}
-        )
-
-    payload = {
-        "vector": {"name": "dense", "vector": vec},
-        "limit": limit,
-        "with_payload": True,
-        "with_vector": True,
-        "filter": {"must": must},
-    }
-    try:
-        r = requests.post(
-            f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points/search",
-            json=payload,
-            timeout=30,
-        )
-        r.raise_for_status()
-        results = r.json().get("result", []) or []
-
-        candidates: List[Candidate] = []
-        for res in results:
-            md = res.get("payload") or {}
-            content = md.get("content")
-            if not content:
-                continue
-
-            vector = res.get("vector")
-            if isinstance(vector, dict):
-                vector = vector.get("dense") or vector.get("vector")
-            if not vector:
-                continue
-
-            # Force routing into the system_ontology block (the stitch step sends
-            # any candidate whose namespace contains "reference"/"doc"/"spec" there).
-            reference_source = md.get("source")
-            md = {
-                **md,
-                "namespace": "reference",
-                "reference_source": reference_source,
-                "source": f'{md.get("product", "ref")}@{md.get("version", "?")}',
-            }
-            candidates.append(
-                Candidate(
-                    id=str(res.get("id")),
-                    content=str(content),
-                    vector=list(vector),
-                    metadata=md,
-                    token_count=0,
-                    score=res.get("score"),
-                )
-            )
-        return candidates
-
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
-            log.warning("Qdrant collection missing, skipping reference recall")
-            return []
-        raise
-
-
-def _reference_candidate_payload(candidate: Candidate) -> Dict[str, Any]:
-    """Return one agent-facing Reference Memory search result."""
-    md = candidate.metadata or {}
-    return {
-        "id": candidate.id,
-        "score": candidate.score,
-        "memory_type": md.get("memory_type"),
-        "content": candidate.content,
-        "product": md.get("product"),
-        "version": md.get("version"),
-        "scope": md.get("scope"),
-        "provider": md.get("provider"),
-        "source": md.get("reference_source", md.get("source")),
-        "doc_section": md.get("doc_section"),
-        "ref_key": md.get("ref_key"),
-        "chunk_index": md.get("chunk_index"),
-        "ingested_at": md.get("ingested_at"),
-    }
-
-
-def _qdrant_reference_get(chunk_id: str) -> Optional[Dict[str, Any]]:
-    """Exact-read one Reference Memory point by stable Qdrant point id."""
-    payload = {
-        "ids": [chunk_id],
-        "with_payload": True,
-        "with_vector": False,
-    }
-    r = requests.post(
-        f"{QDRANT_URL}/collections/{QDRANT_COLLECTION}/points",
-        json=payload,
-        timeout=30,
-    )
-    r.raise_for_status()
-    points = r.json().get("result", []) or []
-    if not points:
-        return None
-
-    point = points[0]
-    md = point.get("payload") or {}
-    if md.get("memory_type") != "reference_memory":
-        return None
-
-    return {
-        "id": str(point.get("id")),
-        "memory_type": md.get("memory_type"),
-        "content": md.get("content"),
-        "product": md.get("product"),
-        "version": md.get("version"),
-        "scope": md.get("scope"),
-        "provider": md.get("provider"),
-        "source": md.get("source"),
-        "doc_section": md.get("doc_section"),
-        "ref_key": md.get("ref_key"),
-        "chunk_index": md.get("chunk_index"),
-        "ingested_at": md.get("ingested_at"),
-    }
-
-
-def _maximal_marginal_relevance(
-    query_vec: List[float],
-    candidates: List[Candidate],
-    top_k: int,
-    lambda_mult: float,
-) -> List[Candidate]:
-    if not candidates:
-        return []
-
-    query_np = np.array(query_vec, dtype=np.float32).reshape(1, -1)
-    cand_np = np.array([c.vector for c in candidates], dtype=np.float32)
-
-    sim_to_query = cosine_similarity(query_np, cand_np)[0]
-
-    selected_indices: List[int] = []
-    candidate_indices = list(range(len(candidates)))
-
-    for _ in range(min(top_k, len(candidates))):
-        best_score = -np.inf
-        best_idx = -1
-
-        for idx in candidate_indices:
-            relevance = float(sim_to_query[idx])
-
-            if selected_indices:
-                sim_to_selected = cosine_similarity(
-                    cand_np[idx].reshape(1, -1),
-                    cand_np[selected_indices],
-                )
-                redundancy = float(np.max(sim_to_selected))
-            else:
-                redundancy = 0.0
-
-            score = (lambda_mult * relevance) - ((1.0 - lambda_mult) * redundancy)
-
-            if score > best_score:
-                best_score = score
-                best_idx = idx
-
-        if best_idx != -1:
-            selected_indices.append(best_idx)
-            candidate_indices.remove(best_idx)
-
-    return [candidates[i] for i in selected_indices]
-
-
-def _stitch_context_structured(
-    candidates: List[Candidate],
-    max_tokens: int,
-    model: str,
-) -> Tuple[Dict[str, List[str]], Dict[str, List[str]], int, int, int, int]:
-    if not candidates:
-        return {}, {}, 0, 0, 0, 0
-
-    ontology_grouped: Dict[str, List[str]] = {}
-    context_grouped: Dict[str, List[str]] = {}
-    used_tokens = 0
-    used_items = 0
-    dropped_budget = 0
-    dropped_no_content = 0
-
-    for c in candidates:
-        if not c.content or not c.content.strip():
-            dropped_no_content += 1
-            continue
-
-        if c.token_count == 0:
-            c.token_count = _count_tokens(model, c.content)
-
-        cost = c.token_count + 5
-
-        if used_tokens + cost > max_tokens:
-            dropped_budget += 1
-            continue
-
-        metadata_source = str(c.metadata.get("source", "GENERAL_CONTEXT")).upper()
-        namespace = str(c.metadata.get("namespace", metadata_source)).lower()
-        group_key = metadata_source.replace("_", " ")
-        clean_content = c.content.replace("\n", " ").strip()
-
-        if "reference" in namespace or "doc" in namespace or "spec" in namespace:
-            ontology_grouped.setdefault(group_key, []).append(clean_content)
-        else:
-            context_grouped.setdefault(group_key, []).append(clean_content)
-
-        used_tokens += cost
-        used_items += 1
-
-    return (
-        ontology_grouped,
-        context_grouped,
-        used_items,
-        used_tokens,
-        dropped_budget,
-        dropped_no_content,
-    )
-
-
-def _selected_candidate_refs(
-    candidates: List[Candidate],
-    max_tokens: int,
-    model: str,
-) -> List[Dict[str, Any]]:
-    """Return stable identifiers/provenance for candidates admitted by stitch budget."""
-    refs: List[Dict[str, Any]] = []
-    used_tokens = 0
-    for c in candidates:
-        if not c.content or not c.content.strip():
-            continue
-        if c.token_count == 0:
-            c.token_count = _count_tokens(model, c.content)
-        cost = c.token_count + 5
-        if used_tokens + cost > max_tokens:
-            continue
-        md = c.metadata or {}
-        refs.append(
-            {
-                "id": c.id,
-                "memory_type": md.get("memory_type"),
-                "source": md.get("source"),
-                "namespace": md.get("namespace"),
-                "product": md.get("product"),
-                "version": md.get("version"),
-                "scope": md.get("scope"),
-                "evidence_ref": md.get("evidence_ref"),
-                "content_hash": md.get("content_hash"),
-            }
-        )
-        used_tokens += cost
-    return refs
 
 
 def _retrieve_context_structured(
@@ -880,139 +99,21 @@ def _retrieve_context_structured(
     artifact_selectors: Optional[List[ArtifactSelector]] = None,
     reference_filters: dict[str, str] | None = None,
 ) -> Dict[str, Any]:
-    """Canonical retrieval operation shared by chat and AMP agent retrieval."""
-    with telemetry.step(request_id=request_id, project_id=project_id, name="pg_static"):
-        static_rows = _pg_static_load(mode=mode)
-        static_rules = _extract_static_rules(static_rows)
-        static_tokens_est = 200
-
-    with telemetry.step(request_id=request_id, project_id=project_id, name="pg_agent_reference"):
-        agent_artifacts = _pg_agent_reference_load(project_id, artifact_selectors or [])
-
-    raw_candidates: List[Candidate] = []
-    reranked: List[Candidate] = []
-    ontology_dict: Dict[str, List[str]] = {}
-    context_dict: Dict[str, List[str]] = {}
-    selected_count = 0
-    dynamic_tokens_est = 0
-    dropped_budget = 0
-    dropped_no_content = 0
-    selected_items: List[Dict[str, Any]] = []
-
-    if query:
-        with telemetry.step(request_id=request_id, project_id=project_id, name="embed"):
-            query_vec = _embed_one(query)
-        with telemetry.step(
-            request_id=request_id, project_id=project_id, name="qdrant_search"
-        ):
-            raw_candidates = _qdrant_dense(project_id, query_vec, DENSE_PREFETCH)
-
-        if REFERENCE_RETRIEVAL_ENABLED and (mode or "engineering") in REFERENCE_MODES:
-            with telemetry.step(
-                request_id=request_id, project_id=project_id, name="qdrant_reference"
-            ):
-                ref_candidates = _qdrant_reference(
-                    query_vec,
-                    DENSE_PREFETCH,
-                    reference_filters=reference_filters,
-                )
-            raw_candidates = ref_candidates + raw_candidates
-
-        reranked = _maximal_marginal_relevance(
-            query_vec=query_vec,
-            candidates=raw_candidates,
-            top_k=TOP_K,
-            lambda_mult=MMR_LAMBDA,
-        )
-        dense_budget = max(0, _effective_max_context_tokens() - static_tokens_est)
-        (
-            ontology_dict,
-            context_dict,
-            selected_count,
-            dynamic_tokens_est,
-            dropped_budget,
-            dropped_no_content,
-        ) = _stitch_context_structured(
-            candidates=reranked,
-            max_tokens=dense_budget,
-            model=model,
-        )
-        selected_items = _selected_candidate_refs(reranked, dense_budget, model)
-    context_tokens_est = static_tokens_est + dynamic_tokens_est
-
-    log.info(
-        "context.retrieval_complete request_id=%s static_tokens_est=%d dynamic_tokens_est=%d context_tokens_est=%d",
-        request_id,
-        static_tokens_est,
-        dynamic_tokens_est,
-        context_tokens_est,
+    """Compatibility seam: orchestration lives in retrieval.py; dependencies remain patchable here."""
+    return retrieval_core.retrieve_context_structured(
+        request_id=request_id,
+        project_id=project_id,
+        query=query,
+        model=model,
+        mode=mode,
+        artifact_selectors=artifact_selectors,
+        reference_filters=reference_filters,
+        pg_static_loader=_pg_static_load,
+        pg_agent_reference_loader=_pg_agent_reference_load,
+        embedder=_embed_one,
+        dense_search=_qdrant_dense,
+        reference_search=_qdrant_reference,
     )
-
-    return {
-        "policy_layer": static_rules,
-        "system_ontology": ontology_dict,
-        "retrieval_context": context_dict,
-        "agent_reference": agent_artifacts,
-        "selected_items": selected_items,
-        "accounting": {
-            "dense_candidates": len(raw_candidates),
-            "selected_topk": selected_count,
-            "context_tokens_est": context_tokens_est,
-            "static_tokens_est": static_tokens_est,
-            "dynamic_tokens_est": dynamic_tokens_est,
-            "dropped_budget": dropped_budget,
-            "dropped_no_content": dropped_no_content,
-        },
-    }
-
-
-def _render_context_envelope(
-    retrieval: Dict[str, Any],
-    query: str,
-    recent_messages: List[ChatMessage],
-) -> str:
-    """Chat-only projection of structured retrieval into the canonical envelope."""
-    dialogue_history = [
-        {"role": m.role, "content": m.content} for m in recent_messages[-4:]
-    ]
-    envelope = {
-        "policy_layer": retrieval["policy_layer"],
-        "enforcement_protocol": {
-            "steps": [
-                "1. Parse the entire canonical envelope before generating output.",
-                "2. Treat policy_layer as non-overridable behavioral and stylistic authority.",
-                "3. Ground factual claims first in system_ontology and retrieval_context.",
-                "4. If retrieved context is insufficient for general engineering or scientific queries, synthesize using established parametric knowledge.",
-                "5. Never allow parametric knowledge to silently override or contradict system_ontology or policy_layer.",
-                "6. Use dialogue_state only for continuity, not authority.",
-                "7. Interpret current_objective precisely without expanding its scope.",
-                "8. Before finalizing output, verify structural and policy compliance.",
-                "9. If any constraint is violated, correct internally before emitting output.",
-                "10. Operator commands (text beginning with /glap) execute ONLY when a human "
-                "submits them. You cannot run them. Never state or imply that a file was written, "
-                "a repository changed, memory was ingested, configuration was applied, or any other "
-                "side effect occurred as a result of your output. If an operation is needed, emit the "
-                "exact /glap command on its own line and instruct the operator to run it; printing the "
-                "command does not execute it.",
-            ]
-        },
-        "system_ontology": retrieval["system_ontology"],
-        "retrieval_context": retrieval["retrieval_context"],
-        "dialogue_state": {"recent_turns": dialogue_history},
-        "current_objective": {"instruction": query},
-        "final_reminder": (
-            "Final validation required: output must strictly comply with policy_layer, "
-            "follow enforcement_protocol, and remain within current_objective scope. "
-            "Distinguish clearly between retrieved architectural facts and general parametric knowledge. "
-            "Never claim that an operator command (/glap) executed or that any side effect occurred; "
-            "you may only propose commands for the operator to run. "
-            "Non-compliant output is invalid."
-        ),
-    }
-    final_text = json.dumps(envelope, indent=2)
-    if DEBUG_PROMPTS:
-        log.info("debug.context_assembly final_text=\n%s", final_text)
-    return final_text
 
 
 def _assemble_context(
@@ -1022,8 +123,7 @@ def _assemble_context(
     model: str,
     recent_messages: List[ChatMessage],
     mode: Optional[str] = None,
-) -> Tuple[str, int, int, int, int, int, int, int]:
-    """Compatibility wrapper for callers/tests using the pre-AMP helper."""
+):
     retrieval = _retrieve_context_structured(
         request_id=request_id,
         project_id=project_id,
@@ -1032,86 +132,17 @@ def _assemble_context(
         mode=mode,
     )
     final_text = _render_context_envelope(retrieval, query, recent_messages)
-    a = retrieval["accounting"]
+    accounting = retrieval["accounting"]
     return (
         final_text,
-        a["dense_candidates"],
-        a["selected_topk"],
-        a["context_tokens_est"],
-        a["static_tokens_est"],
-        a["dynamic_tokens_est"],
-        a["dropped_budget"],
-        a["dropped_no_content"],
+        accounting["dense_candidates"],
+        accounting["selected_topk"],
+        accounting["context_tokens_est"],
+        accounting["static_tokens_est"],
+        accounting["dynamic_tokens_est"],
+        accounting["dropped_budget"],
+        accounting["dropped_no_content"],
     )
-
-
-
-def _normalize_builder_base(url: str) -> str:
-    u = url.rstrip("/")
-    if u.endswith("/v1"):
-        return u[:-3]
-    return u
-
-
-def _builder_openai_url(path: str) -> str:
-    base = _normalize_builder_base(_effective_builder_base_url())
-    return f"{base}/v1{path}"
-
-
-def _get_builder_default_model() -> str:
-    global _default_model_cache
-    if BUILDER_MODEL:
-        return BUILDER_MODEL
-    if _default_model_cache:
-        return _default_model_cache
-
-    r = requests.get(_builder_openai_url("/models"), timeout=15)
-    r.raise_for_status()
-    data = r.json().get("data") or []
-    if not data or not data[0].get("id"):
-        raise RuntimeError("builder /v1/models invalid; set BUILDER_MODEL")
-    _default_model_cache = data[0]["id"]
-    return _default_model_cache
-
-
-# ------------------------------------------------------------------------------
-# Steward
-# ------------------------------------------------------------------------------
-
-
-def _async_admit(request_id: str, project_id: str, messages: List[Dict[str, str]]):
-    if not STEWARD_URL:
-        return
-
-    def run():
-        h = telemetry.step_begin(
-            request_id=request_id, project_id=project_id, name="steward_async_call"
-        )
-        try:
-            r = requests.post(
-                f"{STEWARD_URL}/admit",
-                json={
-                    "request_id": request_id,
-                    "project_id": project_id,
-                    "messages": messages,
-                },
-                timeout=20,
-            )
-            telemetry.step_end(
-                handle=h,
-                ok=r.ok,
-                http_status=r.status_code,
-                error_detail=None if r.ok else (r.text or "")[:500],
-            )
-        except Exception as e:
-            telemetry.step_end(handle=h, ok=False, error_detail=str(e))
-
-    threading.Thread(target=run, daemon=True).start()
-
-
-# ------------------------------------------------------------------------------
-# Routes
-# ------------------------------------------------------------------------------
 
 
 @app.get("/healthz")
@@ -1125,7 +156,7 @@ def list_models():
         "object": "list",
         "data": [
             {
-                "id": BUILDER_MODEL or "homel-model",
+                "id": config.effective_builder_model() or "homel-model",
                 "object": "model",
                 "created": int(time.time()),
                 "owned_by": "memory-router",
@@ -1164,10 +195,11 @@ def reference_get(chunk_id: str, http_req: Request):
 def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
     if not req.query and not req.artifact_selectors:
         raise HTTPException(status_code=422, detail="query or artifact_selectors is required")
+
     context_request_id = uuid.uuid4().hex
     pid = _project_id(http_req)
     origin = _origin_base(http_req)
-    model = (req.model or "").strip() or _effective_builder_model() or _get_builder_default_model()
+    model = (req.model or "").strip() or config.effective_builder_model() or _get_builder_default_model()
 
     telemetry.request_begin(
         request_id=context_request_id,
@@ -1176,7 +208,7 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
         origin_hash=None,
         model_requested=req.model,
         decided_mode=req.mode,
-        context_budget_max=_effective_max_context_tokens(),
+        context_budget_max=config.effective_max_context_tokens(),
         static_tokens_est=None,
         dynamic_tokens_est=None,
     )
@@ -1190,30 +222,33 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
             artifact_selectors=req.artifact_selectors,
             reference_filters=req.reference_filters,
         )
-        a = retrieval["accounting"]
+        accounting = retrieval["accounting"]
         telemetry.retrieval_write(
             request_id=context_request_id,
             project_id=pid,
-            dense_candidates=a["dense_candidates"],
-            selected_topk=a["selected_topk"],
-            context_tokens_est=a["context_tokens_est"],
-            dropped_budget=a["dropped_budget"],
-            dropped_no_content=a["dropped_no_content"],
+            dense_candidates=accounting["dense_candidates"],
+            selected_topk=accounting["selected_topk"],
+            context_tokens_est=accounting["context_tokens_est"],
+            dropped_budget=accounting["dropped_budget"],
+            dropped_no_content=accounting["dropped_no_content"],
             dropped_other=0,
         )
         telemetry.request_end(
             request_id=context_request_id,
             http_status=200,
-            context_budget_max=_effective_max_context_tokens(),
-            static_tokens_est=a["static_tokens_est"],
-            dynamic_tokens_est=a["dynamic_tokens_est"],
+            context_budget_max=config.effective_max_context_tokens(),
+            static_tokens_est=accounting["static_tokens_est"],
+            dynamic_tokens_est=accounting["dynamic_tokens_est"],
         )
         return {
             "context_request_id": context_request_id,
             "project_id": pid,
             "mode": req.mode,
             "dialogue_state": {
-                "recent_turns": [m.model_dump(mode="json") for m in req.recent_messages[-4:]]
+                "recent_turns": [
+                    message.model_dump(mode="json")
+                    for message in req.recent_messages[-4:]
+                ]
             },
             **retrieval,
         }
@@ -1236,26 +271,22 @@ def chat(req: ChatCompletionRequest, http_req: Request):
     model_requested = (req.model or "").strip() or None
 
     try:
-        user_msg = next(m for m in reversed(req.messages) if m.role == "user")
+        user_msg = next(message for message in reversed(req.messages) if message.role == "user")
         user_text = user_msg.text_content
-        # user_text = next(m.content for m in reversed(req.messages) if m.role == "user")
     except StopIteration:
         return {"choices": [{"message": {"role": "assistant", "content": "Ready."}}]}
 
-    # ------------------------------------------------------------------
-    # GLAP INTERCEPT (Control Plane Path)
-    # ------------------------------------------------------------------
     if user_text.strip().lower().startswith("/glap"):
         http_status, response = handle_glap(user_text, pid)
-
         if req.stream:
             content = (
-                response.get("choices", [{}])[0].get("message", {}).get("content", "")
+                response.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
             )
             return StreamingResponse(
                 _glap_stream_generator(content), media_type="text/event-stream"
             )
-
         return JSONResponse(status_code=http_status, content=response)
 
     telemetry.request_begin(
@@ -1265,7 +296,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         origin_hash=None,
         model_requested=model_requested,
         decided_mode=req.mode,
-        context_budget_max=_effective_max_context_tokens(),
+        context_budget_max=config.effective_max_context_tokens(),
         static_tokens_est=None,
         dynamic_tokens_est=None,
     )
@@ -1278,37 +309,28 @@ def chat(req: ChatCompletionRequest, http_req: Request):
     completion_tokens: Optional[int] = None
 
     try:
-        model = _effective_builder_model() or _get_builder_default_model()
+        model = config.effective_builder_model() or _get_builder_default_model()
         model_sent = model
 
-        # ------------------------------------------------------------------
-        # GLOBAL TOKEN BUDGET ENFORCEMENT
-        # ------------------------------------------------------------------
         user_text_tokens = _count_tokens(model, user_text)
-        history_msgs = req.messages[:-1]
-
-        # Reserve budget for RAG + Canonical Envelope + Final Message + Buffer
+        history_messages = req.messages[:-1]
         allowed_history_tokens = (
-            MAX_TOTAL_TOKENS - _effective_max_context_tokens() - user_text_tokens - 200
+            config.MAX_TOTAL_TOKENS
+            - config.effective_max_context_tokens()
+            - user_text_tokens
+            - 200
         )
 
-        pruned_history = []
-        current_hist_tokens = 0
-
-        # Slide window backwards to keep most recent context
-        for m in reversed(history_msgs):
-            m_tok = _count_tokens(model, m.text_content)
-            if current_hist_tokens + m_tok > allowed_history_tokens:
+        pruned_history: List[ChatMessage] = []
+        current_history_tokens = 0
+        for message in reversed(history_messages):
+            message_tokens = _count_tokens(model, message.text_content)
+            if current_history_tokens + message_tokens > allowed_history_tokens:
                 break
-            pruned_history.insert(0, m)
-            current_hist_tokens += m_tok
+            pruned_history.insert(0, message)
+            current_history_tokens += message_tokens
 
         builder_messages = pruned_history + [req.messages[-1]]
-
-        # ------------------------------------------------------------------
-        # CONTEXT ASSEMBLY
-        # ------------------------------------------------------------------
-
         retrieval = _retrieve_context_structured(
             request_id=request_id,
             project_id=pid,
@@ -1337,81 +359,85 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             dropped_other=0,
         )
 
-        upstream_msgs: List[Dict[str, str]] = []
+        upstream_messages: List[Dict[str, Any]] = []
         if system_ctx.strip():
-            upstream_msgs.append({"role": "system", "content": system_ctx})
-        upstream_msgs.extend([m.model_dump() for m in req.messages])
+            upstream_messages.append({"role": "system", "content": system_ctx})
+        # Important: use the pruned history calculated above. The previous code
+        # rebuilt the payload from req.messages and accidentally bypassed its own
+        # global history budget.
+        upstream_messages.extend(message.model_dump() for message in builder_messages)
 
-        if DEBUG_PROMPTS:
+        if config.DEBUG_PROMPTS:
             log.info(
                 "debug.prompt request_id=%s upstream_msgs=%s",
                 request_id,
-                json.dumps(upstream_msgs, indent=2),
+                json.dumps(upstream_messages, indent=2),
             )
 
-        # prompt_tokens = sum(_count_tokens(model, m["content"]) for m in upstream_msgs)
-        def _safe_count(c):
-            if isinstance(c, str):
-                return _count_tokens(model, c)
+        def _safe_count(content: Any) -> int:
+            if isinstance(content, str):
+                return _count_tokens(model, content)
             return _count_tokens(
-                model, " ".join(i.get("text", "") for i in c if i.get("type") == "text")
+                model,
+                " ".join(
+                    item.get("text", "")
+                    for item in content
+                    if item.get("type") == "text"
+                ),
             )
 
-        prompt_tokens = sum(_safe_count(m["content"]) for m in upstream_msgs)
-
+        prompt_tokens = sum(_safe_count(message["content"]) for message in upstream_messages)
         log.info(
-            "prompt.tokens=%d model=%s request_id=%s", prompt_tokens, model, request_id
+            "prompt.tokens=%d model=%s request_id=%s",
+            prompt_tokens,
+            model,
+            request_id,
         )
 
         payload = {
             "model": model,
-            "messages": upstream_msgs,
+            "messages": upstream_messages,
             "temperature": req.temperature,
             "stream": False,
         }
 
-        resp: Dict[str, Any] = {}
+        response_body: Dict[str, Any] = {}
         assistant = ""
-
         for attempt in (1, 2):
             step_name = "builder_chat" if attempt == 1 else "builder_chat_retry_empty"
             with telemetry.step(request_id=request_id, project_id=pid, name=step_name):
-                r = requests.post(
+                response = requests.post(
                     _builder_openai_url("/chat/completions"),
-                    headers={"Authorization": f"Bearer {BUILDER_API_KEY}"},
+                    headers={"Authorization": f"Bearer {config.BUILDER_API_KEY}"},
                     json=payload,
                     timeout=180,
                 )
-                http_status = r.status_code
-
-                if not r.ok:
+                http_status = response.status_code
+                if not response.ok:
                     error_kind = "builder_error"
-                    error_detail = (r.text or "")[:1000]
+                    error_detail = (response.text or "")[:1000]
                     log.error(
                         "builder.error status=%s body=%s request_id=%s",
-                        r.status_code,
-                        r.text,
+                        response.status_code,
+                        response.text,
                         request_id,
                     )
-                    r.raise_for_status()
+                    response.raise_for_status()
 
-                resp = r.json()
+                response_body = response.json()
                 assistant = (
-                    ((resp.get("choices") or [{}])[0].get("message") or {}).get(
+                    ((response_body.get("choices") or [{}])[0].get("message") or {}).get(
                         "content"
                     )
                 ) or ""
-
                 log.info(
                     "builder.reply request_id=%s attempt=%d assistant_len=%d",
                     request_id,
                     attempt,
                     len(assistant),
                 )
-
                 if assistant.strip():
                     break
-
                 if attempt == 1:
                     time.sleep(0.25)
 
@@ -1421,11 +447,9 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             log.error(
                 "builder.empty_completion request_id=%s body=%s",
                 request_id,
-                (json.dumps(resp)[:2000] if resp else ""),
+                json.dumps(response_body)[:2000] if response_body else "",
             )
-            raise HTTPException(
-                status_code=502, detail="builder returned empty completion"
-            )
+            raise HTTPException(status_code=502, detail="builder returned empty completion")
 
         completion_tokens = _count_tokens(model, assistant)
         log.info(
@@ -1438,11 +462,8 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         _async_admit(
             request_id=request_id,
             project_id=pid,
-            messages=[
-                {"role": "user", "content": user_text},
-            ],
+            messages=[{"role": "user", "content": user_text}],
         )
-
         log.info(
             "admit.request_id=%s project_id=%s user_text=%s",
             request_id,
@@ -1451,68 +472,48 @@ def chat(req: ChatCompletionRequest, http_req: Request):
         )
 
         if req.stream:
-
             def sse():
-                ts = int(time.time())
-                chunk_id = f"chat-{ts}"
-
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "id": chunk_id,
-                            "object": "chat.completion.chunk",
-                            "created": ts,
-                            "model": model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {
-                                        "role": "assistant",
-                                        "content": assistant,
-                                    },
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                    )
-                    + "\n\n"
-                )
-
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "id": chunk_id,
-                            "object": "chat.completion.chunk",
-                            "created": ts,
-                            "model": model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {},
-                                    "finish_reason": "stop",
-                                }
-                            ],
-                        }
-                    )
-                    + "\n\n"
-                )
-
+                created = int(time.time())
+                chunk_id = f"chat-{created}"
+                yield "data: " + json.dumps(
+                    {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": assistant},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                ) + "\n\n"
+                yield "data: " + json.dumps(
+                    {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model,
+                        "choices": [
+                            {"index": 0, "delta": {}, "finish_reason": "stop"}
+                        ],
+                    }
+                ) + "\n\n"
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(sse(), media_type="text/event-stream")
 
-        return resp
+        return response_body
 
-    except Exception as e:
+    except Exception as exc:
         if http_status is None:
             http_status = 500
         if error_kind is None:
             error_kind = "router_exception"
-            error_detail = str(e)
+            error_detail = str(exc)
         raise
-
     finally:
         telemetry.request_end(
             request_id=request_id,
@@ -1525,7 +526,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
             total_tokens=((prompt_tokens or 0) + (completion_tokens or 0))
             if (prompt_tokens is not None or completion_tokens is not None)
             else None,
-            context_budget_max=_effective_max_context_tokens(),
+            context_budget_max=config.effective_max_context_tokens(),
             static_tokens_est=static_tokens_est
             if "static_tokens_est" in locals()
             else None,

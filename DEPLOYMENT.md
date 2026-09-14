@@ -1,154 +1,85 @@
 # DEPLOYMENT
-## Installation and Runtime Entry Points (Minikube + Kubernetes Manifests)
-### Repository Root Guide (Non-Canonical)
-*Namespace: memory-steward • Owner: architecture-team*
+## Minikube / Kubernetes Entry Points
 
----
+### 0. Current Runtime Defaults
 
-## 0. Status, Scope, and Authority
+- Kubernetes namespace: `ms`
+- Installer Minikube profile: `minikube`
+- Repository Taskfile namespace: `ms`
 
-**Status:** OPERATIONAL
-**Audience:** Users, operators, contributors
-**Change policy:**
-- Append-only
-- No silent edits
+### 1. Prerequisites
 
-This document defines the operational entry points required to install and run Memory Steward from this repository using Minikube and the `k8s/` manifests. It also defines the canonical bootstrap endpoint `sh.homel.dev`, which is intentionally proxied by Cloudflare and dispatches installer scripts via redirect.
+- `git`
+- `kubectl`
+- `minikube`
+- `go-task` / `task` when using Taskfile operations
 
----
+### 2. Bootstrap
 
-## 1. Quick Start (Recommended Bootstrap)
-
-### 1.1 Canonical Install Entry Point (Cloudflare Worker)
-The canonical installation UX MUST use the `sh.homel.dev` bootstrap endpoint:
+The repository installer is `install/install.sh`.
 
 ~~~bash
 curl -fsSL https://sh.homel.dev/install-ms.sh | bash
 ~~~
 
-**Behavior:**
-- `sh.homel.dev` is intentionally proxied by Cloudflare.
-- A Cloudflare Worker is bound to `sh.homel.dev` and handles specific install-script paths.
-- For `install-ms.sh`, the Worker returns a redirect-only response:
+The redirect/bootstrap mechanism is deployment infrastructure outside the repository runtime; the checked-in installer remains the source for what the local bootstrap actually performs.
 
-~~~text
-HTTP/2 302
-Location: https://raw.githubusercontent.com/homel-dev/memory-steward/main/install/install.sh
-Content-Length: 0
-~~~
-
-**Hard Invariant:** This Cloudflare Worker + redirect dispatcher pattern is intentional. It MUST NOT be treated as suspicious or “broken DNS”.
-
-[Back to top](#navigation)
-
----
-
-## 2. Prerequisites (Local Kubernetes via Minikube)
-
-You MUST have the following installed:
-- `git`
-- `kubectl`
-- `minikube`
-
-[Back to top](#navigation)
-
----
-
-## 3. What the Installer Does
-
-The installer script bootstraps a local environment by:
-- Starting Minikube (profile: `homel`)
-- Enabling the Minikube ingress addon
-- Applying the Kubernetes manifests under `./k8s` into namespace `homel`
-- Waiting for core workloads to become Ready
-- Initializing the Postgres schema from `./sql`
-
-[Back to top](#navigation)
-
----
-
-## 4. Access URLs (Ingress)
-
-Ingress is enabled by default during installation. The concrete URL depends on your local networking.
-
-You MAY use Minikube IP to reach the ingress controller:
+### 3. Preferred Repository Workflow
 
 ~~~bash
-minikube -p homel ip
+task up             # deploy, wait, initialize, verify
+task ops:service:status
+task ops:service:wait
 ~~~
 
-> **Warning:** If `k8s/ingress.yaml` uses host-based routing (e.g., `homel.dev`), you MUST map that hostname to the chosen IP (e.g., via `/etc/hosts`) or use a DNS solution that resolves it.
+`task build` creates local `homel/*:dev` images in Minikube, but the checked-in manifests still reference GHCR images. It is therefore a developer image-build helper, not an implicit input to `task up`. To consume those local images, override the manifest image references/pull policy explicitly.
 
-[Back to top](#navigation)
+### 4. Workload Lifecycle
 
----
+Restart stateless application services and the log collector:
 
-## 5. Operational Commands
-
-### 5.1 Apply Manifests
 ~~~bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -n homel -f k8s/
+task ops:service:restart
 ~~~
 
-### 5.2 Check Status
+Restart stateful stores only explicitly:
+
 ~~~bash
-kubectl get pods -n homel
-kubectl get svc -n homel
+task ops:storage:restart:postgres
+task ops:storage:restart:qdrant
 ~~~
 
-### 5.3 Logs
+Tear down the namespace:
+
 ~~~bash
-kubectl logs -n homel -l app=memory-router -f
-kubectl logs -n homel -l app=memory-steward -f
+task down
 ~~~
 
-[Back to top](#navigation)
+`task down` deletes namespace `ms`; treat it as destructive because namespaced PVCs are removed with the namespace.
 
----
+### 5. MCP Operator Access
 
-## 6. Container Images (GHCR)
+Do not add a public MCP ingress for routine operator work.
 
-This repository publishes component images to GitHub Container Registry (GHCR).
-
-Image namespace:
-~~~text
-ghcr.io/homel-dev/memory-steward/<component>:<version>
+~~~bash
+task ops:mcp:tools
+task ops:mcp:call -- ref_list
 ~~~
 
-Components include:
-- `embeddings`
-- `memory-router`
-- `memory-steward`
-- `memory-steward-mcp`
-- `memory-steward-list`
+For a local MCP-capable application:
 
-**Hard Invariant:** Kubernetes manifests in `k8s/` MUST reference pinned image versions for reproducible deployments.
+~~~bash
+task ops:mcp:forward
+# http://127.0.0.1:8081/mcp
+~~~
 
-[Back to top](#navigation)
+### 6. Direct Kubernetes Inspection
 
----
+~~~bash
+kubectl get pods,svc -n ms
+kubectl get deploy,statefulset,daemonset -n ms
+~~~
 
-## 7. Cloudflare Worker Notes (Optional Hardening)
+### 7. Images
 
-The Cloudflare Worker currently returns a redirect-only `302`. This is correct and preferred for install dispatchers.
-
-If you want additional hardening, the Worker MAY add:
-- `Cache-Control: no-store`
-- `Content-Type: text/plain; charset=utf-8` (even for redirects)
-- Path allow-listing (serve only known `/install-*.sh` endpoints; return `404` for everything else)
-
-These are optional and not required for correctness.
-
-[Back to top](#navigation)
-
----
-
-## 8. Closing Statement
-
-This file defines the operational entry points for installation and local deployment. The `sh.homel.dev` Cloudflare Worker dispatcher is a deliberate, stable bootstrap mechanism that redirects to the canonical installer script hosted in GitHub.
-
----
-
-**END OF DEPLOYMENT**
-
+Current manifests include both fixed and floating tags. Do not assume every workload is digest/tag pinned. If reproducible production deployment is required, pin and verify all images in one explicit change set.

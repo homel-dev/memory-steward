@@ -1,196 +1,136 @@
-# BEYOND RAG: ARCHITECTING DETERMINISM
+# BEYOND CHAT HISTORY
+## Memory Steward Architecture Note
+### Background Architecture Note
+*Namespace: memory-steward • Owner: architecture-team*
 
-## The Memory Steward Engineering Manifesto
+---
 
------
+## Navigation
 
-## 1. Abstract
+**← [Prev: Document 13 (Admission Control Proposal)](13_admission_control.md) | [Next: README](../README.md) →**
 
-Standard Retrieval-Augmented Generation (RAG) is failing production engineering. By relying on summarization, implicit context, and probabilistic storage, traditional RAG systems suffer from “context drift” and hallucination loops.
+- [0. Status, Scope, and Authority](#0-status-scope-and-authority)
+- [1. Problem](#1-problem)
+- [2. Implemented Separation](#2-implemented-separation)
+- [3. Memory Classes](#3-memory-classes)
+- [4. Asynchronous Ordinary-Chat Admission](#4-asynchronous-ordinary-chat-admission)
+- [5. Operational Mode: Current Reality](#5-operational-mode-current-reality)
+- [6. Operator Surface](#6-operator-surface)
+- [7. Engineering Principle](#7-engineering-principle)
+- [8. Closing Statement](#8-closing-statement)
 
-**Memory Steward** introduces a dual-plane architecture that treats memory as a **deterministic control system**, not a chat log. We propose a separation of concerns: a **Data Plane** for conversation and a **Control Plane** for memory governance, bridged by strict operational modes and an atomic persistence strategy.
+---
 
------
+## 0. Status, Scope, and Authority
 
-## 2. The Problem: The “Alignment Tax” of Memory
+**Status:** BACKGROUND
+**Audience:** Architects, maintainers, evaluators
+**Change policy:** Living background note; implementation claims MUST match the current tree.
 
-Current LLM memory systems typically rely on two flawed mechanisms:
-
-1. **Summarization:** Compressing conversation history into smaller prompts. This loses nuance and creates a “telephone game” effect where facts degrade over time.
-1. **Implicit Injection:** Dumping “relevant” chunks into the context window without validating their utility or truth.
-
-We call this **“Probabilistic Drift.”** When the model is responsible for deciding what to remember, it creates a feedback loop of its own biases. To solve this, we must remove the “decision to remember” from the “act of chatting.”
-
------
-
-## 3. The Solution: Dual-Plane Architecture
-
-Memory Steward splits the system into two distinct active components, separating the “act of speaking” from the “act of remembering.”
-
-### 3.1 The Data Plane (Memory Router)
-
-The fast, stateless “receptionist.” It handles user I/O, performs read-only vector search, and assembles the prompt. **Crucially, it never writes to long-term memory.**
-
-The UI layer (Open WebUI) is a presentation surface only and is not a source of truth, does not own memory, and does not participate in memory admission decisions.
-The Builder LLM is used strictly as an inference backend and has no memory authority or persistence rights.
-
-### 3.2 The Control Plane (Memory Steward)
-
-The slow, thoughtful “librarian.” It observes the chat asynchronously. It decides what facts are worth keeping, sanitizes them, and injects them into the database. **Crucially, it never speaks to the user.**
-
-The Memory Steward acts as an explicit admission controller: it governs memory writes and never participates in prompt generation or user interaction.
-
-### 3.3 C4 Container Diagram
-
-```mermaid
-graph TD
-    User((User))
-    UI[Open WebUI - Non-authoritative]
-
-    subgraph "Data Plane"
-        Router[Memory Router]
-        Builder[Builder LLM - Inference Backend]
-    end
-
-    subgraph "Control Plane"
-        Steward[Memory Steward - Admission Controller]
-    end
-
-    subgraph "Persistence Layer"
-        DB[(Postgres)]
-        Qdrant[(Qdrant)]
-        Logs[(Vector Agent - Log & Telemetry Sink)]
-    end
-
-    classDef plain fill:#ffffff,stroke:#333333,stroke-width:1px;
-    classDef data fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
-    classDef control fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    classDef store fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-
-    class User,UI plain;
-    class Router,Builder data;
-    class Steward control;
-    class DB,Qdrant,Logs store;
-
-    User -->|1. Chat| UI
-    UI -->|2. Fast Path| Router
-    Router -->|3a. Read| DB
-    Router -->|3b. Search| Qdrant
-    Router -->|4. Generate| Builder
-    Builder -->|Response| Router
-    Router -->|5. Reply| UI
-
-    Router -.->|Async Signal| Steward
-    Steward -->|Persist| DB
-    Steward -->|Upsert| Qdrant
-    Steward -.->|Audit| Logs
-```
-
------
-
-## 4. The Async Lifecycle (Hot vs. Cold Paths)
-
-To maintain low latency for the user while performing expensive memory operations (fact extraction, embedding, indexing), the system relies on an asynchronous admission pattern.
-
-As shown below, the user receives their response *before* the system even begins to process the memory of that turn.
-
-### 4.1 Request Sequence Diagram
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant UI as Open WebUI
-    participant R as Memory Router
-    participant B as Builder LLM
-    participant S as Memory Steward
-    participant DB as Postgres / Qdrant
-
-    rect rgb(227,242,253)
-        note right of U: Hot Path (Synchronous)
-        U->>UI: Chat Input
-        UI->>R: Forward Request
-        par Retrieval
-            R->>DB: Query Context
-            R->>R: Load Static Rules
-        end
-        R->>B: Generate Prompt
-        B-->>R: Response
-        R-->>UI: Final Answer
-        UI-->>U: Reply
-    end
-
-    rect rgb(255,243,224)
-        note right of R: Cold Path (Asynchronous)
-        R->>S: Fire-and-Forget Signal
-        S->>S: Extract Atomic Facts
-        S->>DB: Upsert Memory
-    end
-```
-
------
-
-## 5. Philosophy: Atomicity & Operational Modes
-
-### 5.1 Atomicity Over Aggregation
-
-Most systems store “summaries.” Memory Steward stores **Atoms**: discrete, immutable facts.
-
-- **Example:** *“Project ID is 994”* (Atom) vs. *“The user talked about their project”* (Summary)
-- **Result:** A self-healing knowledge graph, not a muddy log file.
-
-### 5.2 Operational Modes & Hysteresis
-
-A chat system should behave differently when debugging code vs. brainstorming ideas. The system detects intent and switches modes (e.g., **Engineering** vs. **Casual**).
-
-To prevent “Mode Jitter,” the system employs **Hysteresis**: a temporal decay function that resists changing modes unless the signal is overwhelming.
+This paper explains the architecture without creating runtime requirements beyond the checked-in code and tests.
 
 [Back to top](#navigation)
 
------
+---
 
-## 6. The “Glass Pane”: ChatOps for Memory
+## 1. Problem
 
-Black-box AI systems are a liability. Memory Steward implements a **Management Interface** via the **Model Context Protocol (MCP)**. This allows operators to inspect, debug, and tune the Steward using natural language directly from the Open WebUI chat interface.
+Long-running LLM and agent workloads need durable context without treating an ever-growing transcript as the memory database. Memory Steward separates retrieval, inference, durable-memory admission, explicit reference ingestion, operator control, and diagnostics so each has a bounded contract.
 
-### 6.1 MCP Topology Diagram
+[Back to top](#navigation)
 
-```mermaid
+---
+
+## 2. Implemented Separation
+
+~~~mermaid
 graph TD
-    Operator[Operator Agent]
+    Client[Client / Open WebUI]
+    Agent[Agent]
+    Router[memory-router]
+    Builder[Builder LLM]
+    Steward[memory-steward]
+    MCP[memory-steward-mcp]
+    PG[(Postgres)]
+    Q[(Qdrant)]
 
-    subgraph "The Glass Pane - MCP Server"
-        MCP[steward-mcp]
-        T1[Tool: ref_ingest_url]
-        T2[Tool: config_set_budget]
-        T3[Tool: diag_explain]
-        R1[mem://static/global]
-        R2[telemetry://logs/recent]
-    end
+    Client --> Router
+    Router --> PG
+    Router --> Q
+    Router --> Builder
+    Router -.-> Steward
+    Agent --> Router
+    Agent --> MCP
+    MCP --> Router
+    MCP --> Steward
+    Steward --> PG
+    Steward --> Q
+~~~
 
-    classDef plain fill:#ffffff,stroke:#333333,stroke-width:1px;
-    classDef tool fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
-    classDef res fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
+The Router owns retrieval/context assembly and Builder dispatch. The Steward owns durable learned-memory admission and structured agent outcomes. MCP is an internal schema-driven operator/agent surface. Postgres carries canonical structured state; Qdrant carries semantic indexes.
 
-    class Operator,MCP plain;
-    class T1,T2,T3 tool;
-    class R1,R2 res;
+[Back to top](#navigation)
 
-    Operator <==>|MCP Protocol| MCP
-    MCP --> T1
-    MCP --> T2
-    MCP --> T3
-    MCP --> R1
-    MCP --> R2
+---
 
-    T1 -->|Scrape| Qdrant[(Qdrant)]
-    T3 -->|Query| Postgres[(Postgres)]
-    R2 -.->|Tail| Logs[(Vector Agent)]
-```
+## 3. Memory Classes
 
------
+Memory Steward distinguishes:
 
-## 7. Closing Statement
+- static operator-managed rules;
+- dynamic Steward-admitted learned fragments;
+- canonical Reference Memory explicitly ingested through MCP;
+- structured `agent_reference` artifacts from agents/analyzers/tools;
+- telemetry and feedback, which are diagnostics rather than learned memory.
 
-Memory Steward is not a “better RAG.” It is a rejection of RAG’s laziness. By enforcing strict contracts, async admission, and deterministic operational modes, we transform the LLM from a probabilistic toy into a reliable engineering component.
+This separation is more important than whether any individual retrieval technique is called RAG.
 
-We don’t just “remember” things. We **steward** them.
+[Back to top](#navigation)
+
+---
+
+## 4. Asynchronous Ordinary-Chat Admission
+
+The chat path returns the Builder result without waiting for ordinary admission. The Router then dispatches `/admit` to Memory Steward in a daemon thread. The system therefore accepts a short consistency window between a user statement and its availability as retrieved dynamic memory.
+
+[Back to top](#navigation)
+
+---
+
+## 5. Operational Mode: Current Reality
+
+The current implementation does not detect operational mode and does not implement hysteresis. `mode` is optional caller-supplied metadata used by Router selection logic. Persisted `FORCE_MODE` and `HYSTERESIS_WINDOW` compatibility keys have no current runtime consumer.
+
+Any future classifier/hysteresis implementation must land with code and tests before it is described as active behavior.
+
+[Back to top](#navigation)
+
+---
+
+## 6. Operator Surface
+
+Memory Steward MCP exposes live tools. Open WebUI `/glap` is one client; terminal FastMCP commands are another. The server is kept internal to the cluster for normal operation, and local clients can use loopback-only `kubectl port-forward`.
+
+The current MCP server is tool-oriented; this paper does not claim unimplemented MCP resources or prompts.
+
+[Back to top](#navigation)
+
+---
+
+## 7. Engineering Principle
+
+Determinism here means explicit authority, schemas, filters, budgets, idempotency, and observable decisions around probabilistic models. It does not mean that LLM inference itself becomes deterministic.
+
+[Back to top](#navigation)
+
+---
+
+## 8. Closing Statement
+
+Memory Steward is defined by explicit runtime boundaries: governed retrieval, separate durable-memory admission, schema-driven MCP control, and diagnostics that do not masquerade as learned memory. Architectural claims in this note remain subordinate to the implementation.
+
+[Back to top](#navigation)
+
+---
+
+**END OF DOCUMENT WHITEPAPER**

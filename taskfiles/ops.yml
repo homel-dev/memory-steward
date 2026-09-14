@@ -1,0 +1,244 @@
+version: '3'
+
+vars:
+  MCP_LOCAL_URL: 'http://127.0.0.1:8081/mcp'
+
+tasks:
+  service:status:
+    desc: 'Show all Memory Steward runtime resources'
+    cmds:
+      - kubectl get deploy,statefulset,daemonset,pod,svc,ingress,pvc -n {{.NAMESPACE}} -o wide
+
+  service:wait:
+    desc: 'Wait for every deployed Memory Steward runtime service'
+    cmds:
+      - kubectl rollout status statefulset/postgres -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status statefulset/qdrant -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status deployment/embeddings -n {{.NAMESPACE}} --timeout=300s
+      - kubectl rollout status deployment/memory-router -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status deployment/memory-steward -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status deployment/memory-steward-mcp -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status deployment/memory-steward-list -n {{.NAMESPACE}} --timeout=300s
+      - kubectl rollout status deployment/open-webui -n {{.NAMESPACE}} --timeout=300s
+      - kubectl rollout status daemonset/vector-agent -n {{.NAMESPACE}} --timeout=180s
+
+  service:health:
+    desc: 'Check every HTTP runtime dependency plus Postgres readiness'
+    cmds:
+      - |
+        kubectl exec -i -n {{.NAMESPACE}} deployment/memory-router -- python - <<'PY'
+        import requests
+
+        checks = [
+            ("memory-router", "http://127.0.0.1:8080/healthz"),
+            ("memory-steward", "http://memory-steward:8090/healthz"),
+            ("memory-steward-mcp", "http://memory-steward-mcp:8081/healthz"),
+            ("memory-steward-list", "http://memory-steward-list:8001/healthz"),
+            ("embeddings", "http://embeddings:8000/healthz"),
+            ("open-webui", "http://open-webui:8080/health"),
+            ("qdrant", "http://qdrant:6333/readyz"),
+        ]
+        for name, url in checks:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            print(f"OK {name}: {response.status_code}")
+        PY
+      - kubectl exec -n {{.NAMESPACE}} statefulset/postgres -- pg_isready -U homel -d homel
+
+  app:stop:
+    desc: 'Stop stateless application Deployments; keep Postgres/Qdrant stateful stores running'
+    prompt: 'Scale all Memory Steward application Deployments to 0 in namespace {{.NAMESPACE}}?'
+    cmds:
+      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/memory-steward-list deployment/open-webui --replicas=0 -n {{.NAMESPACE}}
+
+  app:start:
+    desc: 'Start stateless application Deployments and wait until they are Ready'
+    cmds:
+      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/memory-steward-list deployment/open-webui --replicas=1 -n {{.NAMESPACE}}
+      - task: service:wait
+
+  service:restart:
+    desc: 'Restart all stateless Memory Steward application services'
+    cmds:
+      - kubectl rollout restart deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/memory-steward-list deployment/open-webui -n {{.NAMESPACE}}
+      - kubectl rollout restart daemonset/vector-agent -n {{.NAMESPACE}}
+      - task: service:wait
+
+  service:restart:router:
+    desc: 'Restart memory-router'
+    cmds:
+      - kubectl rollout restart deployment/memory-router -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/memory-router -n {{.NAMESPACE}} --timeout=180s
+
+  service:restart:steward:
+    desc: 'Restart memory-steward admission service'
+    cmds:
+      - kubectl rollout restart deployment/memory-steward -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/memory-steward -n {{.NAMESPACE}} --timeout=180s
+
+  service:restart:mcp:
+    desc: 'Restart memory-steward-mcp control plane'
+    cmds:
+      - kubectl rollout restart deployment/memory-steward-mcp -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/memory-steward-mcp -n {{.NAMESPACE}} --timeout=180s
+
+  service:restart:list:
+    desc: 'Restart memory-steward-list service'
+    cmds:
+      - kubectl rollout restart deployment/memory-steward-list -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/memory-steward-list -n {{.NAMESPACE}} --timeout=300s
+
+  service:restart:embeddings:
+    desc: 'Restart embeddings service'
+    cmds:
+      - kubectl rollout restart deployment/embeddings -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/embeddings -n {{.NAMESPACE}} --timeout=300s
+
+  service:restart:webui:
+    desc: 'Restart Open WebUI'
+    cmds:
+      - kubectl rollout restart deployment/open-webui -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/open-webui -n {{.NAMESPACE}} --timeout=300s
+
+  service:restart:vector:
+    desc: 'Restart Vector log collector'
+    cmds:
+      - kubectl rollout restart daemonset/vector-agent -n {{.NAMESPACE}}
+      - kubectl rollout status daemonset/vector-agent -n {{.NAMESPACE}} --timeout=180s
+
+  storage:restart:postgres:
+    desc: 'Restart Postgres StatefulSet (stateful; explicit task)'
+    prompt: 'Restart Postgres in namespace {{.NAMESPACE}}?'
+    cmds:
+      - kubectl rollout restart statefulset/postgres -n {{.NAMESPACE}}
+      - kubectl rollout status statefulset/postgres -n {{.NAMESPACE}} --timeout=180s
+
+  storage:restart:qdrant:
+    desc: 'Restart Qdrant StatefulSet (stateful; explicit task)'
+    prompt: 'Restart Qdrant in namespace {{.NAMESPACE}}?'
+    cmds:
+      - kubectl rollout restart statefulset/qdrant -n {{.NAMESPACE}}
+      - kubectl rollout status statefulset/qdrant -n {{.NAMESPACE}} --timeout=180s
+
+  logs:mcp:
+    desc: 'Tail memory-steward-mcp logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} deployment/memory-steward-mcp -f --tail=200
+
+  logs:list:
+    desc: 'Tail memory-steward-list logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} deployment/memory-steward-list -f --tail=200
+
+  logs:embeddings:
+    desc: 'Tail embeddings logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} deployment/embeddings -f --tail=200
+
+  logs:webui:
+    desc: 'Tail Open WebUI logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} deployment/open-webui -f --tail=200
+
+  logs:vector:
+    desc: 'Tail Vector log collector logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} daemonset/vector-agent -f --tail=200
+
+  logs:postgres:
+    desc: 'Tail Postgres logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} statefulset/postgres -f --tail=200
+
+  logs:qdrant:
+    desc: 'Tail Qdrant logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} statefulset/qdrant -f --tail=200
+
+  mcp:tools:
+    desc: 'List the live MCP tool surface from inside the cluster'
+    cmds:
+      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp list {{.MCP_LOCAL_URL}} --auth none
+
+  mcp:tools:json:
+    desc: 'List live MCP tools and schemas as JSON'
+    cmds:
+      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp list {{.MCP_LOCAL_URL}} --auth none --json
+
+  mcp:call:
+    desc: 'Call any MCP tool: task ops:mcp:call -- ref_list'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass the tool and arguments after --, for example: task ops:mcp:call -- ref_inspect product=kicad version=9.0'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} {{.CLI_ARGS}} --auth none
+
+  mcp:forward:
+    desc: 'Bind the ClusterIP-only MCP endpoint to localhost:8081 for local MCP clients'
+    cmds:
+      - kubectl port-forward -n {{.NAMESPACE}} service/memory-steward-mcp 8081:8081 --address 127.0.0.1
+
+  ref:list:
+    desc: 'List reference-memory namespaces through MCP'
+    cmds:
+      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_list --auth none
+
+  ref:inspect:
+    desc: 'Inspect reference memory: task ops:ref:inspect -- product=kicad version=9.0 limit=10'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass product/version after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_inspect {{.CLI_ARGS}} --auth none
+
+  ref:ingest:url:
+    desc: 'Ingest reference URL: task ops:ref:ingest:url -- url=https://... product=... version=... scope=...'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass ref_ingest_url arguments after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_url {{.CLI_ARGS}} --auth none
+
+  ref:purge:
+    desc: 'Purge one reference namespace: task ops:ref:purge -- product=... version=...'
+    prompt: 'This removes matching reference-memory chunks. Continue?'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass product/version after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_purge {{.CLI_ARGS}} --auth none
+
+
+  ref:search:
+    desc: 'Semantic Reference Memory search: task ops:ref:search -- project_id=... query=... reference_filters={...}'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass memory.reference.search arguments after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} memory.reference.search {{.CLI_ARGS}} --auth none
+
+  ref:get:
+    desc: 'Fetch one reference chunk: task ops:ref:get -- project_id=... chunk_id=...'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass project_id/chunk_id after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} memory.reference.get {{.CLI_ARGS}} --auth none
+
+  ref:ingest:text:
+    desc: 'Ingest reference text through MCP; use mcp:call for complex JSON/multiline content'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass ref_ingest_text arguments after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_text {{.CLI_ARGS}} --auth none
+
+  config:show:
+    desc: 'Show persisted Memory Steward runtime configuration'
+    cmds:
+      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} config_show --auth none
+
+  diag:health:
+    desc: 'Run MCP diagnostics health check'
+    cmds:
+      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} diag_health --auth none

@@ -1,4 +1,3 @@
-# .github/workflows/main.yml
 name: CI
 
 concurrency:
@@ -21,10 +20,19 @@ jobs:
         include:
           - component: memory-router
             path: components/memory_router
+            allow_no_tests: false
           - component: memory-steward
             path: components/memory_steward
+            allow_no_tests: false
           - component: memory-steward-mcp
             path: components/memory_steward_mcp
+            allow_no_tests: false
+          - component: memory-steward-list
+            path: components/memory_steward_list
+            allow_no_tests: true
+          - component: embeddings
+            path: components/embeddings
+            allow_no_tests: true
 
     steps:
       - name: Check out
@@ -41,9 +49,18 @@ jobs:
 
       - name: Run tests
         working-directory: ${{ matrix.path }}
+        shell: bash
         run: |
-          # Exit code 5 means no tests collected — not a failure
-          uv run pytest || [ $? -eq 5 ]
+          set +e
+          uv run pytest
+          rc=$?
+          set -e
+          # Some optional components currently have no tests; pytest returns 5.
+          # Keep that explicit until tests are added rather than hiding other failures.
+          if [ "$rc" -eq 5 ] && [ "${{ matrix.allow_no_tests }}" = "true" ]; then
+            exit 0
+          fi
+          exit "$rc"
 
   lint:
     name: Lint (${{ matrix.component }})
@@ -78,5 +95,4 @@ jobs:
 
       - name: Ruff lint
         working-directory: ${{ matrix.path }}
-        run: uv run ruff check src tests --fix
-
+        run: uv run ruff check src tests

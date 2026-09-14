@@ -1,341 +1,233 @@
-# MANAGEMENT INTERFACE & MCP STRATEGY
-
-## The “Glass Pane”: Unified Control via Model Context Protocol
-
-### Foundational Engineering Specification (Document 07 of 12)
-
+# MANAGEMENT INTERFACE AND MCP
+## Schema-Driven Operator and Agent Control Surface
+### Foundational Engineering Specification (Document 07 of 14)
 *Namespace: memory-steward • Owner: architecture-team*
 
------
+---
 
 ## Navigation
 
 **← [Prev: Document 06 (Telemetry)](06_telemetry.md) | [Next: Document 08 (Verification)](08_verification.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. Purpose](#1-purpose)
-- [2. Architectural Concept: The Glass Pane](#2-architectural-concept-the-glass-pane)
-- [3. Protocol Strategy: MCP Adoption](#3-protocol-strategy-mcp-adoption)
-- [4. Tool Taxonomy (The Levers)](#4-tool-taxonomy-the-levers)
-- [5. UX Workflows (Assisted Management)](#5-ux-workflows-assisted-management)
-- [6. Safety and Permissions](#6-safety-and-permissions)
-- [7. Implementation Guidance](#7-implementation-guidance)
-- [8. Hard Invariants](#8-hard-invariants)
-- [9. Relationship to Other Documents](#9-relationship-to-other-documents)
-- [10. Summary](#10-summary)
-- [11. Diagnostics: Log Access & Smart Search (MCP)](#11-diagnostics-log-access--smart-search-mcp)
-- [12. Closing Statement](#12-closing-statement)
+- [1. Architecture](#1-architecture)
+- [2. Clients](#2-clients)
+- [3. Implemented Tool Inventory](#3-implemented-tool-inventory)
+- [4. MCP Resources](#4-mcp-resources)
+- [5. Reference-Memory Terminal Workflow](#5-reference-memory-terminal-workflow)
+- [6. Safety and Scope Notes](#6-safety-and-scope-notes)
+- [7. Closing Statement](#7-closing-statement)
 
------
+---
 
 ## 0. Status, Scope, and Authority
 
-**Status:** FOUNDATIONAL
-**Audience:** Core maintainers, operators
-**Change policy:**
+**Status:** IMPLEMENTED
+**Audience:** Maintainers and operators
+**Change policy:** Living implementation-aligned document; no silent behavioral drift.
 
-- Append-only
-- No silent edits
-
-[Back to top](#navigation)
-
------
-
-## 1. Purpose
-
-This document defines the **Management Interface** for the Memory Steward system.
-It specifies:
-
-- How operators interact with the Control Plane.
-- How memory is ingested, tuned, and debugged.
-- The adoption of **Model Context Protocol (MCP)** as the standard interconnect.
-
-This document establishes the **“Glass Pane”**: a unified, natural-language command center that replaces disparate dashboards (SQL viewers, Vector GUIs, Log consoles) with a single, agentic interface.
+This document describes the tools registered by the current `memory-steward-mcp` server. The live MCP schema remains authoritative for parameter types and optional fields.
 
 [Back to top](#navigation)
 
------
+---
 
-## 2. Architectural Concept: The Glass Pane
+## 1. Architecture
 
-### 2.1 Definition
+`memory-steward-mcp` is a FastMCP HTTP server in namespace `ms`. Kubernetes exposes it as the internal Service `memory-steward-mcp`; routine operator access does not require a public ingress.
 
-The **Glass Pane** is a “Single Pane of Glass” abstraction that exposes the internal state and levers of the Memory Steward to an authorized Agent.
-It is **not** a visual dashboard (React/Web).
-It is a **Tool Set** exposed to the Host LLM (Open WebUI).
+~~~mermaid
+graph LR
+    Operator[Operator terminal / MCP client]
+    WebUI[Open WebUI /glap]
+    Agent[Agent runtime]
+    MCP[memory-steward-mcp]
+    Router[memory-router]
+    Steward[memory-steward]
+    PG[(Postgres)]
+    Q[(Qdrant)]
 
-### 2.2 The “ChatOps” Paradigm
+    Operator -->|kubectl exec or loopback port-forward| MCP
+    WebUI -->|Router MCP bridge| MCP
+    Agent -->|MCP| MCP
+    MCP -->|AMP retrieval adapters| Router
+    MCP -->|AMP outcome/feedback adapters| Steward
+    MCP -->|operator state/config/diagnostics| PG
+    MCP -->|reference ingestion/inspection| Q
+~~~
 
-Management actions are performed via **Natural Language Commands** in the chat interface.
-
-- **Input:** “Why did you ignore the Terraform docs?”
-- **Action:** System calls `diag_explain_last()`.
-- **Output:** System renders the telemetry trace directly in the chat.
-
-This unifies **Execution** (The Chat) with **Administration** (The Dashboard).
-
-[Back to top](#navigation)
-
------
-
-## 3. Protocol Strategy: MCP Adoption
-
-The system adopts the **Model Context Protocol (MCP)** to standardize the “glue” between the Host (Interface) and the Steward (Backend).
-
-### 3.1 Mapping Control Plane to MCP
-
-The Control Plane components defined in Documents 01–06 map to MCP primitives as follows:
-
-|Component         |MCP Primitive|Example URI / Signature     |Purpose                                                  |
-|:-----------------|:------------|:---------------------------|:--------------------------------------------------------|
-|**Static Memory** |**Resource** |`mem://static/global`       |Read-only access to immutable rules.                     |
-|**Reference Data**|**Resource** |`ref://{namespace}/{doc_id}`|Direct inspection of chunked knowledge.                  |
-|**Telemetry**     |**Resource** |`telemetry://logs/recent`   |Pull-only observability logs.                            |
-|**Ingestion**     |**Tool**     |`ingest_reference(...)`     |Active fetching and indexing of documentation.           |
-|**Configuration** |**Tool**     |`config_set_budget(...)`     |Runtime tuning of stability parameters.                  |
-|**Mode Logic**    |**Prompt**   |`mode_selection`            |Standardized templates for Steward intent classification.|
-
-### 3.2 Topology
-
-```text
-[ Host: Open WebUI / Agent ]
-        |
-        | (MCP Protocol via Stdio/SSE)
-        v
-[ MCP Server: steward-mcp ]
-   |-- Tools (Ingest, Config, Purge)
-   |-- Resources (Static Files, Logs)
-   |-- Prompts (System Instructions)
-        |
-        +--> [ Vector DB (Qdrant) ]
-        +--> [ Postgres (Telemetry) ]
-        +--> [ Local Filesystem (Static Rules) ]
-```
+The live MCP tool schemas are the command contract. Clients SHOULD discover those schemas rather than maintain a second hard-coded command model.
 
 [Back to top](#navigation)
 
------
+---
 
-## 4. Tool Taxonomy (The Levers)
+## 2. Clients
 
-The Glass Pane exposes three distinct categories of tools, aligned with the system planes.
+### 2.1 Open WebUI `/glap`
 
-### 4.1 Content Plane Tools (Memory Management)
+Memory Router intercepts `/glap` commands and delegates to its MCP bridge. The bridge queries the live MCP tool list and uses current schemas for command help and argument requirements.
 
-Tools to manipulate what the system “knows.”
+### 2.2 Terminal inside Kubernetes
 
-|Tool Name         |Parameters                 |Description                                                      |
-|:-----------------|:--------------------------|:----------------------------------------------------------------|
-|`ingest_reference`|`url`, `product`, `version`|Scrapes, validates, and indexes new documentation.               |
-|`inspect_memory`  |`query`, `namespace`       |Debug tool to perform raw vector search and see retrieved chunks.|
-|`memory.reference.search`|`project_id`, `query`, `reference_filters`, `limit`|Read-only semantic search over canonical Reference Memory. `project_id` is request correlation only; Reference Memory itself is not project-scoped.|
-|`memory.reference.get`|`project_id`, `chunk_id`|Read-only exact fetch of one full Reference Memory chunk by stable chunk ID. Non-reference points are not returned.|
-|`static_update`   |`layer`, `content`         |Overwrites `static_global` or `static_mode_conditioned` text.    |
-|`ref_purge` |`namespace`                |**Destructive.** Removes a specific versioned knowledge base.    |
+~~~bash
+task ops:mcp:tools
+task ops:mcp:tools:json
+task ops:mcp:call -- ref_list
+task ops:ref:inspect -- product=kicad version=9.0 limit=10
+~~~
 
-### 4.2 Stability Plane Tools (Configuration)
+The Task wrappers invoke FastMCP inside the already-deployed MCP pod, so the workstation does not need a separate Python/FastMCP environment.
 
-Tools to tune how the system behaves.
+### 2.3 Local MCP-capable clients
 
-|Tool Name             |Parameters    |Description                                                                  |
-|:---------------------|:-------------|:----------------------------------------------------------------------------|
-|`config_set_budget`    |`max_tokens`  |Adjusts `context_budget_max` (e.g., raise for GPT-4, lower for local models).|
-|`config_force_mode`          |`mode`, `lock`|Overrides the Steward’s classifier (e.g., lock to `engineering`).            |
-|`config_set_hysteresis`|`decay_rate`  |Tunes the “stickiness” of operational modes.                                 |
+~~~bash
+task ops:mcp:forward
+# http://127.0.0.1:8081/mcp
+~~~
 
-### 4.3 Diagnostics Plane Tools (Observability)
-
-Tools to inspect system health and decisions.
-
-|Tool Name          |Parameters             |Description                                                               |
-|:------------------|:----------------------|:-------------------------------------------------------------------------|
-|`diag_health`|*none*                 |Returns connectivity status of Vector DB, Postgres, and Embedding service.|
-|`get_recent_logs`  |`minutes`              |Shows recent error rates and latency spikes.                              |
-|`diag_explain` |`request_id` (optional)|Returns the “Blame Trace” for the last request (dropped reasons, scores). |
+The port-forward binds loopback only. FastMCP can also derive a typed CLI from live tool schemas; a future full-screen TUI SHOULD remain a presentation layer over this same MCP contract rather than define another command API.
 
 [Back to top](#navigation)
 
------
+---
 
-## 5. UX Workflows (Assisted Management)
+## 3. Implemented Tool Inventory
 
-The Glass Pane enforces **High-Grade** rigor without manual toil via “Assisted” workflows.
+### 3.1 Content plane
 
-### 5.1 The Ingestion Interview (No-Boilerplate)
+| Tool | Current responsibility |
+| --- | --- |
+| `ref_ingest_url` | Fetch a URL, chunk/embed it, and upsert canonical Reference Memory. |
+| `ref_ingest_text` | Chunk/embed caller-supplied text and upsert canonical Reference Memory. |
+| `ref_list` | List recorded reference-ingestion namespaces/events. |
+| `ref_inspect` | Inspect chunks for a product/version. |
+| `ref_purge` | Delete canonical reference chunks for a product/version. |
+| `static_list` | List Postgres static-memory rules. |
+| `static_create` | Create a static-memory rule. |
+| `static_update` | Update a static-memory rule. |
+| `static_toggle` | Enable/disable a static-memory rule. |
+| `static_delete` | Permanently delete a static-memory rule. |
+| `cache_control` | Refresh/evict the MCP process's `StaticMemoryCacheManager`. |
 
-**Goal:** Ingest documentation without manually writing YAML manifests.
+`cache_control` MUST NOT be described as clearing the Router's request-path static-memory cache: the current Router reads static memory from Postgres and does not use `memory_steward_mcp.cache.StaticMemoryCacheManager`.
 
-1. **Trigger:** User pastes a URL. *“Add these docs.”*
-1. **Analysis (Agent):** The Agent scrapes the header, detects `Product`, `Version`, and `Scope`.
-1. **Proposal:** Agent displays a “Manifest Card” in chat.
+### 3.2 Stability/config plane
 
-> “Detected: Kubernetes v1.29 (Implementation). **[ Confirm ]**?”
-1. **Execution:** User confirms. Agent calls `ingest_reference`.
-1. **Result:** System handles chunking, embedding, and atomic aliasing in the background.
+| Tool | Current responsibility |
+| --- | --- |
+| `config_set_budget` | Persist `MAX_CONTEXT_TOKENS`; Router consumes it through `runtime_config`. |
+| `config_force_mode` | Persist legacy `FORCE_MODE`; no current Router/Steward consumer. |
+| `config_set_hysteresis` | Persist legacy `HYSTERESIS_WINDOW`; no current hysteresis engine. |
+| `config_show` | Show persisted runtime-config keys and their current consumer status. |
 
-### 5.2 Contextual Debugging
+### 3.3 Diagnostics plane
 
-**Goal:** Diagnose hallucination or retrieval failure instantly.
+| Tool | Current responsibility |
+| --- | --- |
+| `diag_health` | Check Qdrant, Postgres, embeddings, LIST, and Router connectivity/state. |
+| `diag_explain` | Read the telemetry blame trace for a request ID. |
+| `diag_explain_last` | Explain the most recent telemetry request. |
+| `diag_metrics` | Summarize bounded request/retrieval/admission/step metrics. |
+| `diag_qdrant_stats` | Show collection status and counts by memory type. |
+| `dyn_inspect` | Inspect dynamic-memory rows for a project. |
+| `dyn_simulate_retrieval` | Run a diagnostic dense Qdrant lookup for a project/query. |
+| `diag_logs` | Read a bounded tail from the configured log directory. |
 
-1. **Trigger:** User asks *“Why did you miss the firewall rule?”*
-1. **Execution:** Agent calls `diag_explain()`.
-1. **Result:**
+`dyn_simulate_retrieval` is a diagnostic candidate lookup, not a bit-for-bit reproduction of the Router's complete retrieval/MMR/budget pipeline.
 
-> “I dropped the firewall chunk because:
->    
->    1. **Budget:** Static memory took 80% of tokens.
->    1. **Similarity:** Score (0.72) was below the `high_precision` threshold.”
+### 3.4 Git/repository plane
 
-[Back to top](#navigation)
+| Tool | Current responsibility |
+| --- | --- |
+| `repo_add` | Register a named Git provider connection in Postgres. |
+| `repo_list` | List configured repository connections. |
+| `repo_remove` | Remove a configured connection. |
+| `repo_test` | Test a configured connection. |
+| `git_list_repos` | List repositories visible through a connection. |
+| `git_ingest_repo` | Ingest repository files into Reference Memory. |
+| `git_ingest_file` | Ingest one repository file into Reference Memory. |
+| `git_write_file` | Create/update a repository file when the connection is `read-write`. |
 
------
+The current provider adapters cover GitLab, GitHub, and Bitbucket. Connection credentials are persisted by the current Git-plane implementation; the MCP service therefore belongs on a trusted internal operator boundary.
 
-## 6. Safety and Permissions
+### 3.5 Agent plane
 
-### 6.1 Destructive Action Safeguards
+| Tool | Current responsibility |
+| --- | --- |
+| `memory.retrieve_context` | Delegate governed structured retrieval to Router. |
+| `memory.reference.search` | Delegate Reference Memory semantic search to Router. |
+| `memory.reference.get` | Delegate exact reference-chunk fetch to Router. |
+| `memory.submit_agent_outcome` | Delegate structured outcome admission/persistence to Steward. |
+| `memory.submit_context_feedback` | Delegate retrieval-quality feedback to Steward. |
 
-Tools that mutate state (Delete, Update, Purge) MUST:
-
-- Be exposed only to authorized Admin Agents.
-- Implement a “Human-in-the-Loop” confirmation parameter where possible.
-- Log the `user_id` of the operator performing the action in Telemetry.
-
-### 6.2 Asynchronous Execution
-
-Long-running tools (Ingestion, Re-indexing) MUST NOT block the chat.
-
-- **Pattern:** The Tool returns a “Job Started” signal immediately.
-- **Notification:** The System notifies the user upon completion (via a future turn or notification event).
-
-[Back to top](#navigation)
-
------
-
-## 7. Implementation Guidance
-
-The Glass Pane is implemented as a **FastMCP Server** (Python).
-
-```python
-# steward_mcp.py (Conceptual)
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("Steward-GlassPane")
-
-@mcp.tool()
-async def diag_explain() -> str:
-    """Explains why specific memories were included or dropped."""
-    # Connects to Telemetry Plane [Doc 06]
-    return telemetry_service.get_last_blame()
-
-@mcp.tool()
-async def ingest_reference(url: str, product: str) -> str:
-    """Ingests documentation. Returns Job ID."""
-    # Connects to Content Plane [Doc 03]
-    job_id = ingestion_queue.add(url, product)
-    return f"Job {job_id} started."
-```
+AMP handlers are transport adapters; they MUST NOT independently implement Router retrieval policy or Steward admission policy.
 
 [Back to top](#navigation)
 
------
+---
 
-## 8. Hard Invariants
+## 4. MCP Resources
 
-> **Hard Invariant:** **No Implicit Writes:** The system never ingests memory without explicit tool invocation and confirmation.
-> **Hard Invariant:** **Pull-Only Diagnostics:** Telemetry is never injected into the prompt context unless explicitly requested via `diag_explain`.
-> **Hard Invariant:** **Identity Isolation:** The Management Interface uses a distinct `client_id` in telemetry to distinguish Ops actions from User chats.
-> **Hard Invariant:** **Atomic Config:** Configuration changes (e.g., Budget) take effect immediately for the next request.
+The current server registers one explicit MCP resource:
 
-[Back to top](#navigation)
+- `diagnostics://contract` — JSON view of selected diagnostics/runtime values exposed by `diagnostics_plane.py`.
 
------
-
-## 9. Relationship to Other Documents
-
-- **Consumes Doc 03:** Provides the UI for Reference Memory Ingestion.
-- **Consumes Doc 05:** Provides the controls for Stability/Hysteresis tuning.
-- **Consumes Doc 06:** Exposes the Telemetry data defined in the Diagnostics Plane.
+The repository does **not** currently register the old conceptual `mem://...`, `ref://...`, or telemetry resource families from earlier design drafts. Reference and memory inspection are tool operations in the current implementation.
 
 [Back to top](#navigation)
 
------
+---
 
-## 10. Summary
+## 5. Reference-Memory Terminal Workflow
 
-The **Glass Pane** transforms the Memory Steward from a “Black Box” into a “Transparent Engine.”
-By leveraging MCP and ChatOps, it achieves **High-Grade** manageability (audit trails, explicit confirmation, rigorous schemas) with **Consumer-Grade** usability (natural language, zero-boilerplate).
+Reference ingestion is explicit and synchronous.
 
-[Back to top](#navigation)
+~~~bash
+# Discover the live schema first.
+task ops:mcp:tools:json
 
------
+# List current reference namespaces/events.
+task ops:ref:list
 
-## 11. Diagnostics: Log Access & Smart Search (MCP)
+# Inspect one product/version.
+task ops:ref:inspect -- product=kicad version=9.0 limit=10
 
-The Glass Pane provides operator-grade access to system logs via MCP tools.
-Interfaces are **read-only**, time-bounded, and designed for rapid triage and explainability.
+# Ingest a URL.
+task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
 
-### 11.1 Tool: `diag_logs`
+# Search canonical Reference Memory through the Router-owned agent API adapter.
+task ops:ref:search -- project_id=operator query="hierarchical sheet syntax"
 
-**Parameters**
+# Purge is destructive and the Task wrapper prompts first.
+task ops:ref:purge -- product=kicad version=9.0
+~~~
 
-- `service` (string; required): One of `memory-router`, `memory-steward`, `memory-steward-mcp`, `memory-steward-list`, `embeddings`, `qdrant`, `postgres`, `vllm-builder`, `vllm-steward`, `open-webui`.
-- `lines` (int; default **200**; max **1000**): Tail line count.
-- `grep` (string; optional): Substring or RE2 pattern.
-- `since` / `until` (RFC 3339; optional): Time window.
-- `stream` (`stdout` | `stderr` | `both`; default **both**).
-
-**Returns**
-
-- `service`, `range` (resolved time bounds), `lines[]` (ordered, newest-last), `truncated` (bool).
-
-### 11.2 Tool: `diagnostics.logs.smart_search`
-
-LLM-assisted retrieval and slicing over logs with strict caps.
-
-**Parameters**
-
-- `service` (required), `query` (string), `minutes` (int; default **60**; max **360**).
-
-**Capabilities**
-
-- Pattern clustering (repeated errors, bursts).
-- Error-to-cause link hints (e.g., connection refused → upstream health).
-- Structured extracts: timestamps, pod, severity.
-
-**Returns**
-
-- `summary`, `clusters[]` (pattern, count, exemplar lines), `snippets[]` (bounded slices), `limits` (caps applied).
-
-### 11.3 Tool: `diagnostics.health.predict`
-
-Heuristic health scoring from recent logs and telemetry.
-
-**Parameters**
-
-- `window_minutes` (default **30**)
-
-**Returns**
-
-- `risk_score` (0–1), `signals[]` (e.g., rotation spikes, write errors), `recommendations[]`.
-
-### 11.4 Safety & Bounds
-
-- All tools are **read-only**.
-- Hard caps: `lines ≤ 1000`, `window ≤ 6 h`, response size ≤ 512 KB.
-- Secrets redaction MAY be applied at agent or MCP layer.
-
-### 11.5 Operator UX (Open WebUI)
-
-- Glass Pane tools are accessible via the `/glap` slash-command interface in Open WebUI. Commands are auto-seeded on first use by the Memory Router (see `mcp_bridge.py`). Operators interact using natural language — e.g. `/glap diag_metrics` or `/glap diag_explain_last`. Operators can refine log queries with `grep`, `since`, `until` parameters.
+For multiline/raw text ingestion, use `ops:mcp:call`/FastMCP argument encoding directly; the live tool schema defines the accepted parameters.
 
 [Back to top](#navigation)
 
------
+---
 
-## 12. Closing Statement
+## 6. Safety and Scope Notes
 
-The Management Interface transforms the Steward from a passive service into an interactive partner. By exposing safe, bounded tools, we enable the system to participate in its own maintenance and debugging.
+- Do not add a public MCP ingress merely for operator convenience.
+- Prefer `kubectl exec` or loopback-only port-forward for local operation.
+- Destructive tools MUST remain explicit and auditable.
+- Git write operations MUST use a `read-write` connection; read-only connections are rejected by the Git plane.
+- `ref_ingest_url` performs server-side URL fetching. Deployments with strict SSRF/egress requirements SHOULD add destination validation and network egress policy before treating arbitrary URLs as safe input.
+- MCP configuration text MUST distinguish persisted compatibility keys from keys that have active runtime consumers.
 
------
+[Back to top](#navigation)
+
+---
+
+## 7. Closing Statement
+
+The MCP server is the single schema-driven operator/agent control surface. Terminal, Open WebUI, and future TUI clients SHOULD consume the same live MCP schemas rather than create parallel command contracts.
+
+[Back to top](#navigation)
+
+---
 
 **END OF DOCUMENT 07**

@@ -1,6 +1,13 @@
 # Taskfile.yml
 version: '3'
 
+includes:
+  ops:
+    taskfile: ./taskfiles/ops.yml
+    flatten: false
+    vars:
+      NAMESPACE: '{{.NAMESPACE}}'
+
 vars:
   NAMESPACE: ms
   QDRANT_COLLECTION: homel_memory
@@ -10,8 +17,8 @@ vars:
   INGRESS_HTTPS_PORT: '30443'
   BACKUP_DIR: './backups'
   # Tooling image used by every ephemeral ops Job (migrate/backup/restore/export).
-  # Local minikube default (loaded by `task build`, no registry pull needed).
-  # For GHCR set: ghcr.io/<owner>/<repo>/tooling:latest
+  # Runtime ops currently use GHCR through this value.
+  # `task build` creates local homel/*:dev images; it does not rewrite manifests or this variable.
   TOOLING_IMAGE: ghcr.io/homel-dev/memory-steward/tooling:latest
 
 tasks:
@@ -24,7 +31,7 @@ tasks:
   # 🚀 LIFECYCLE
   # ============================================================================
   up:
-    desc: "Full Bootstrap: Bootstrap -> Deploy -> Wait -> Init -> Verify"
+    desc: "Deploy -> Wait -> Init -> Verify using the current Kubernetes context"
     cmds:
       - task: k8s:deploy
       - task: k8s:wait
@@ -53,7 +60,7 @@ tasks:
   # 🐳 BUILD
   # ============================================================================
   build:
-    desc: "Build images into Minikube (incl. tooling)"
+    desc: "Build local Minikube homel/*:dev images; default manifests still pull GHCR"
     cmds:
       - minikube image build -t homel/embeddings:dev ./components/embeddings
       - minikube image build -t homel/memory-router:dev ./components/memory_router
@@ -77,21 +84,14 @@ tasks:
       - kubectl apply -k k8s/oco-consumer/
 
   k8s:wait:
-    desc: "Block until core services are Ready"
+    desc: "Block until every Memory Steward runtime service is Ready"
     cmds:
-      - kubectl rollout status -n {{.NAMESPACE}} statefulset/postgres --timeout=120s
-      - kubectl rollout status -n {{.NAMESPACE}} statefulset/qdrant --timeout=120s
-      - kubectl rollout status -n {{.NAMESPACE}} deployment/memory-router --timeout=120s
-      - kubectl rollout status -n {{.NAMESPACE}} deployment/memory-steward --timeout=120s
+      - task: ops:service:wait
 
   k8s:restart:
-    desc: "Restart all core services"
+    desc: "Restart all stateless application services and Vector"
     cmds:
-      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-router
-      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward
-      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward-mcp
-      - kubectl rollout restart -n {{.NAMESPACE}} deployment/memory-steward-list
-      - kubectl rollout restart -n {{.NAMESPACE}} deployment/open-webui
+      - task: ops:service:restart
 
   # ============================================================================
   # 💾 DATA & STATE (INIT) -- non-destructive
@@ -410,8 +410,7 @@ tasks:
   verify:health:
     desc: "Check healthz endpoints"
     cmds:
-      - kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://localhost:8080/healthz
-      - kubectl exec -n {{.NAMESPACE}} deploy/memory-router -- curl -sSf http://memory-steward:8090/healthz
+      - task: ops:service:health
 
   verify:amp:
     desc: "Smoke-test AMP artifact write + exact Router retrieval (no LLM required)"

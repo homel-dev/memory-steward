@@ -7,20 +7,21 @@ metadata:
 data:
   QDRANT_URL: "http://qdrant:6333"
   EMBEDDINGS_URL: "http://embeddings:8000"
-  #BUILDER_BASE_URL: "http://vllm-builder:8000/v1"
   BUILDER_BASE_URL: "https://api.openai.com/v1"
   STEWARD_URL: "http://memory-steward:8090"
   MEMORY_ROUTER_URL: "http://memory-router:8080"
   STEWARD_LLM_BASE_URL: "http://llm-large.llm-runtime.svc.cluster.local:8000"
-  AUDITOR_LLM_BASE_URL: "http://llm-small.llm-runtime.svc.cluster.local:8000"
   MCP_URL: "http://memory-steward-mcp:8081/mcp"
   MAX_CONTEXT_TOKENS: "128000"
+  # Router prompt-input planning ceiling. Keep this greater than MAX_CONTEXT_TOKENS
+  # and revalidate it whenever BUILDER_MODEL/provider changes.
+  MAX_TOTAL_TOKENS: "262144"
   QDRANT_COLLECTION: "homel_memory"
-  RECENCY_HALF_LIFE_SECONDS: "604800"
   DENSE_PREFETCH: "25"
   TOP_K: "8"
-  MIN_CONFIDENCE: "0.7"
+  # Consumed only by the MCP process-local StaticMemoryCacheManager.
   STATIC_MEMORY_REFRESH_SECONDS: "1800"
+  # Compatibility/diagnostics value only; no current mode-hysteresis engine consumes it.
   HYSTERESIS_WINDOW: "8"
   OPEN_WEBUI_URL: "http://open-webui:8080"
   # OPEN_WEBUI_API_KEY is sensitive — set via secret, not here.

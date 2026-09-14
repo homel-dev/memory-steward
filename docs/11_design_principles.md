@@ -1,82 +1,79 @@
-
-# DESIGN PHILOSOPHY & ASYNC SEMANTICS
-## Freshness, Human-Tempo Interaction, and Storage Theory
-### Foundational Engineering Specification (Document 11 of 12)
+# DESIGN PRINCIPLES
+## Separation, Bounded Context, and Asynchronous Admission
+### Foundational Engineering Specification (Document 11 of 14)
 *Namespace: memory-steward • Owner: architecture-team*
 
 ---
 
 ## Navigation
+
 **← [Prev: Document 10 (Landscape)](10_industry_landscape.md) | [Next: Document 12 (Extensions)](12_extensions.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. Purpose](#1-purpose)
-- [2. Storage Philosophy](#2-storage-philosophy)
-- [3. Asynchronous Semantics](#3-asynchronous-semantics)
-- [4. Freshness vs. Latency](#4-freshness-vs-latency)
-- [5. Closing Statement](#5-closing-statement)
+- [1. Separation of Responsibilities](#1-separation-of-responsibilities)
+- [2. Retrieval over Raw History Growth](#2-retrieval-over-raw-history-growth)
+- [3. Asynchronous Ordinary-Chat Admission](#3-asynchronous-ordinary-chat-admission)
+- [4. Structured Agent Outcomes](#4-structured-agent-outcomes)
+- [5. Failure Isolation](#5-failure-isolation)
+- [6. Closing Statement](#6-closing-statement)
 
 ---
 
 ## 0. Status, Scope, and Authority
 
-**Status:** FOUNDATIONAL
-**Audience:** Core maintainers, storage engineers
-**Change policy:**
-- Append-only
-- No silent edits
+**Status:** IMPLEMENTED
+**Audience:** Maintainers and architects
+**Change policy:** Living implementation-aligned document; no silent behavioral drift.
 
 [Back to top](#navigation)
 
 ---
 
-## 1. Purpose
+## 1. Separation of Responsibilities
 
-This document captures the "Soft" engineering decisions—the *why* behind the *how*. It merges the Storage Philosophy and Asynchronous Design specs.
-
-[Back to top](#navigation)
-
----
-
-## 2. Storage Philosophy
-
-Memory Steward follows three foundational principles:
-
-1.  **Atomicity over Aggregation:** Store individual facts ("Project code is 994"), not summaries ("User talked about project codes").
-2.  **Retrieval over Compression:** Do not compress context; filter it.
-3.  **Auditability over Convenience:** Every memory must be traceable to a specific admission event.
+The Router retrieves and assembles Builder context. The Steward performs durable-memory admission. MCP exposes explicit control/agent operations. LIST is an optional input service. Diagnostics are not treated as learned memory.
 
 [Back to top](#navigation)
 
 ---
 
-## 3. Asynchronous Semantics
+## 2. Retrieval over Raw History Growth
 
-### 3.1 Human-Tempo Interaction
-The system assumes a human cadence (seconds to minutes between turns).
-This allows the **Steward** to perform expensive admission logic in the background without blocking the **Router's** fast response.
-
-### 3.2 The Inconsistency Window
-* **State:** Memory updates may lag one turn behind the conversation.
-* **Impact:** If a user says "My name is Bob" and immediately asks "What is my name?" in < 500ms, the system *might* miss it.
-* **Acceptance:** This is an accepted trade-off for architectural separation.
+The Router uses selected static/dynamic/reference context and bounded chat history rather than treating all prior conversation as durable memory.
 
 [Back to top](#navigation)
 
 ---
 
-## 4. Freshness vs. Latency
+## 3. Asynchronous Ordinary-Chat Admission
 
-We prioritize **Correctness of Extraction** over **Immediacy of Availability**.
-It is better to remember the right fact 2 seconds late than to remember a hallucination instantly.
+Chat response delivery does not wait for ordinary admission completion. The Router dispatches admission asynchronously after the Builder response. Consequently, newly stated facts may not be available to retrieval immediately.
 
 [Back to top](#navigation)
 
 ---
 
-## 5. Closing Statement
+## 4. Structured Agent Outcomes
 
-The architecture is intentionally **loosely coupled** to allow the Control Plane to operate at a higher cognitive level (and slower speed) than the conversational Data Plane.
+Agents submit structured outcomes/artifacts rather than synthetic chat transcripts. Durable knowledge extraction remains governed by Steward logic; validated reusable artifacts can be persisted separately as `agent_reference`.
+
+[Back to top](#navigation)
+
+---
+
+## 5. Failure Isolation
+
+Best-effort side paths (telemetry, async admission) should not replace a successful primary response merely because their own operation fails. This rule applies only where the code explicitly implements that isolation.
+
+[Back to top](#navigation)
+
+---
+
+## 6. Closing Statement
+
+These principles summarize behavior already visible in the implementation. They guide changes but do not override executable contracts in code, tests, manifests, or API schemas.
+
+[Back to top](#navigation)
 
 ---
 

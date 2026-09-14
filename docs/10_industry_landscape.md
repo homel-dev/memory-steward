@@ -1,88 +1,71 @@
-# INDUSTRY LANDSCAPE & ARCHITECTURAL POSITIONING
-## Why Memory Steward is Not "Just Another RAG"
-### Foundational Engineering Specification (Document 10 of 12)
+# INDUSTRY LANDSCAPE
+## Background and Architectural Positioning
+### Foundational Engineering Specification (Document 10 of 14)
 *Namespace: memory-steward • Owner: architecture-team*
 
 ---
 
 ## Navigation
-**← [Prev: Document 09 (Runtime)](09_runtime_contract.md) | [Next: Document 11 (Design)](11_design_principles.md) →**
+
+**← [Prev: Document 09 (Runtime Contract)](09_runtime_contract.md) | [Next: Document 11 (Design Principles)](11_design_principles.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. Purpose](#1-purpose)
-- [2. The RAG Failure Pattern](#2-the-rag-failure-pattern)
-- [3. Comparative Analysis](#3-comparative-analysis)
-- [4. Unique Architectural Stance](#4-unique-architectural-stance)
-- [5. Closing Statement](#5-closing-statement)
+- [1. Positioning](#1-positioning)
+- [2. Repository-Specific Differentiators](#2-repository-specific-differentiators)
+- [3. Non-Authority](#3-non-authority)
+- [4. Closing Statement](#4-closing-statement)
 
 ---
 
 ## 0. Status, Scope, and Authority
 
-**Status:** FOUNDATIONAL
-**Audience:** Core maintainers, system architects
-**Change policy:**
-- Append-only
-- No silent edits
+**Status:** BACKGROUND
+**Audience:** Architects and maintainers
+**Change policy:** Living implementation-aligned document; no silent behavioral drift.
+
+This document is rationale, not a runtime contract. Product comparisons age quickly and MUST NOT be used to infer current behavior of third-party systems without fresh source verification.
 
 [Back to top](#navigation)
 
 ---
 
-## 1. Purpose
+## 1. Positioning
 
-This document justifies the architectural existence of Memory Steward.
-It serves as a defense against regression into simpler, failure-prone designs.
-
-[Back to top](#navigation)
-
----
-
-## 2. The RAG Failure Pattern
-
-Standard RAG systems fail because they rely on:
-1.  **Summarization:** Compressing history loses detail and nuance irreversibly.
-2.  **Model-Driven Storage:** Letting the model decide what to keep leads to "ego bias" and hallucination loops.
-3.  **Implicit Context:** Mixing chat logs with factual memory pollutes the knowledge base.
-
-Memory Steward explicitly **rejects** all three.
-
-[Back to top](#navigation)
-
-
----
-
-## 3. Comparative Analysis
-
-### 3.1 vs. MemGPT
-* **MemGPT:** The reasoning model manages its own memory (OS-style).
-* **Risk:** The model can hallucinate its own operating instructions.
-* **Steward:** Memory is managed by a separate **Control Plane**. The reasoning model is a guest, not the admin.
-
-### 3.2 vs. Zep
-* **Zep:** heavily relies on summarization chains.
-* **Risk:** Semantic drift over time ("Telephone game").
-* **Steward:** Uses **Atomic Fragmentation**. Original facts are preserved verbatim, never re-summarized.
+Memory Steward is designed around explicit separation between inference, retrieval, durable-memory admission, operator control, and diagnostics. The implementation favors explicit schemas and bounded storage/retrieval contracts over implicit model-managed persistence.
 
 [Back to top](#navigation)
 
 ---
 
-## 4. Unique Architectural Stance
+## 2. Repository-Specific Differentiators
 
-Memory Steward is defined by its invariants:
-* **Admission before Persistence:** Nothing enters DB without a decision.
-* **Retrieval before Injection:** Context is a query result, not a window.
-* **Atomicity over Aggregation:** Facts are stored as discrete units.
+Current implementation characteristics include:
+
+- a dedicated Router for context assembly and Builder dispatch;
+- a separate Steward admission service;
+- explicit canonical reference ingestion through MCP;
+- structured AMP retrieval/outcome contracts;
+- Postgres-backed structured state and telemetry;
+- Qdrant-backed semantic indexes;
+- schema-driven MCP operator tooling.
 
 [Back to top](#navigation)
 
 ---
 
-## 5. Closing Statement
+## 3. Non-Authority
 
-Memory Steward is not a chatbot framework.
-It is a **Cognitive Control Plane** designed to impose determinism on probabilistic systems.
+Claims about MemGPT, Zep, LangChain, or other external projects are not architectural invariants of Memory Steward. If comparative analysis is added, cite current upstream documentation and date the comparison.
+
+[Back to top](#navigation)
+
+---
+
+## 4. Closing Statement
+
+This background document explains Memory Steward’s repository-specific design stance. It MUST NOT be used as authority for third-party product behavior or for unimplemented Memory Steward features.
+
+[Back to top](#navigation)
 
 ---
 

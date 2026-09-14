@@ -1,206 +1,93 @@
-
-# STABILITY, TEMPORAL SEMANTICS, AND MODE HYSTERESIS
-## Preventing Mode Jitter and Cognitive Thrashing
-### Foundational Engineering Specification (Document 05 of 12)
+# RUNTIME CONFIGURATION AND STABILITY
+## Implemented Dynamic Configuration and Inactive Compatibility Keys
+### Foundational Engineering Specification (Document 05 of 14)
 *Namespace: memory-steward • Owner: architecture-team*
 
 ---
 
 ## Navigation
-**← [Prev: Document 04 (Optimizations)](04_optimizations.md) | [cite_start][Next: Document 06 (Telemetry)](06_telemetry.md) →** [cite: 321]
+
+**← [Prev: Document 04 (Optimizations)](04_optimizations.md) | [Next: Document 06 (Telemetry)](06_telemetry.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. Purpose](#1-purpose)
-- [2. Problem Statement: Mode Jitter](#2-problem-statement-mode-jitter)
-- [3. Principle: Temporal Coherence](#3-principle-temporal-coherence)
-- [4. [cite_start]Mode Hysteresis Model](#4-mode-hysteresis-model) [cite: 322]
-- [5. [cite_start]Explicit Overrides](#5-explicit-overrides) [cite: 323]
-- [6. Failure Modes Prevented](#6-failure-modes-prevented)
-- [7. Auditability Requirement](#7-auditability-requirement)
-- [8. [cite_start]Summary](#8-summary) [cite: 324]
+- [1. Runtime Configuration Store](#1-runtime-configuration-store)
+- [2. MCP Configuration Tools](#2-mcp-configuration-tools)
+- [3. Not Implemented](#3-not-implemented)
+- [4. Safe Evolution](#4-safe-evolution)
+- [5. Closing Statement](#5-closing-statement)
 
 ---
 
 ## 0. Status, Scope, and Authority
 
-**Status:** FOUNDATIONAL
-**Audience:** Core maintainers, system operators
-**Change policy:**
-- Append-only
-- No silent edits
-
-This document defines the mechanisms ensuring behavioral stability and preventing rapid operational oscillation across requests.
+**Status:** PARTIAL
+**Audience:** Maintainers and operators
+**Change policy:** Living implementation-aligned document; no silent behavioral drift.
 
 [Back to top](#navigation)
 
 ---
 
-## 1. Purpose
+## 1. Runtime Configuration Store
 
-[cite_start]This document defines mechanisms that stabilize **Mode Classification** over time, preventing oscillation between operational modes during ambiguous or transitional interactions. [cite: 325]
-This document:
-- introduces temporal semantics for mode decisions
-- improves behavioral stability
-- preserves canonical authority boundaries
+`memory-steward-mcp` persists operator configuration in the Postgres `runtime_config` table.
 
-This document does **NOT**:
-- alter canonical mode definitions
-- weaken gating rules
-- introduce new modes
+The Router currently reloads and consumes these keys:
 
-[Back to top](#navigation)
+- `MAX_CONTEXT_TOKENS`
+- `BUILDER_BASE_URL`
+- `BUILDER_MODEL`
 
----
-
-## 2. Problem Statement: Mode Jitter
-
-In real engineering workflows, users naturally interleave:
-
-- design questions (“why”)
-- implementation tasks (“how”)
-- validation and verification (“is this correct?”)
-
-Strict per-request reclassification may cause:
-
-- rapid mode switching
-- inconsistent prompt behavior
-- unnecessary context churn
-- fluctuating rigor levels
-
-[cite_start]This phenomenon is referred to as **Mode Jitter**. [cite: 326]
+The Router caches runtime-config reads for a bounded TTL to avoid a database read on every request.
 
 [Back to top](#navigation)
 
 ---
 
-## 3. Principle: Temporal Coherence
+## 2. MCP Configuration Tools
 
-[cite_start]Operational mode is a **temporal state**, not a purely stateless label. [cite: 327]
-Short-lived ambiguity or transitional phrasing must not override:
-- sustained user intent
-- established workflow posture
-- previously dominant mode signals
+Implemented tools include:
 
-[cite_start]Temporal coherence favors **stability over reactivity**. [cite: 328]
+- `config_set_budget`
+- `config_force_mode`
+- `config_set_hysteresis`
+- `config_show`
 
-[Back to top](#navigation)
+`config_set_budget` has an active Router consumer.
 
----
-
-## 4. Mode Hysteresis Model
-
-### 4.1 Core Idea
-
-[cite_start]Mode transitions are subject to **inertia**. [cite: 329]
-A mode change requires:
-- sustained evidence
-- sufficient confidence
-- temporal reinforcement
-
-[cite_start]Single-sample signals are insufficient. [cite: 330]
-
-### 4.2 State Variables
-
-The Memory Steward maintains the following conceptual state:
-
-- `M_current` — currently active mode
-- `M_candidate` — newly inferred mode
-- `confidence_score` — per-inference confidence
-- `decay_window` — sliding evaluation window
-
-[cite_start]These variables are **control-plane internal state**. [cite: 331]
-
-### 4.3 Transition Rule (Conceptual)
-
-~~~text
-If confidence(M_candidate) sustained over K interactions
-AND confidence exceeds threshold
-THEN transition to M_candidate
-ELSE remain in M_current
-~~~
-
-[cite_start]This rule applies symmetrically to all modes. [cite: 332]
-
-### 4.4 Decay Function
-
-[cite_start]Recent interactions are weighted more heavily than older ones. [cite: 333]
-Example decay model (conceptual):
-
-~~~text
-weight = e^( -Δt / τ )
-~~~
-
-Where:
-- Δt = time elapsed since interaction
-- τ  = decay constant
-
-The exact function is implementation-defined but MUST be:
-- monotonic
-- time-sensitive
-- deterministic
+`config_force_mode` and `config_set_hysteresis` currently persist compatibility keys only. The Router/Steward do not consume `FORCE_MODE` or `HYSTERESIS_WINDOW`; therefore those two operations MUST NOT be represented as changing live request behavior.
 
 [Back to top](#navigation)
 
 ---
 
-## 5. Explicit Overrides
+## 3. Not Implemented
 
-Mode hysteresis MUST be bypassed when:
+There is currently no:
 
-- the user explicitly declares a mode
-- the system enters safety-critical operation
-- a canonical invariant requires immediate strictness
-
-Explicit user intent always has priority.
-
-[Back to top](#navigation)
-
----
-
-## 6. Failure Modes Prevented
-
-The hysteresis mechanism prevents:
-
-- mode thrashing
-- prompt instability
-- context pollution
-- inconsistent rigor enforcement
-- accidental relaxation of constraints
-
-These are **stability failures**, not intelligence failures.
+- mode transition state machine;
+- hysteresis window enforcement;
+- decay function;
+- mode-jitter telemetry;
+- forced-mode application in Router or Steward.
 
 [Back to top](#navigation)
 
 ---
 
-## 7. Auditability Requirement
+## 4. Safe Evolution
 
-[cite_start]Every mode transition MUST be logged with: [cite: 334]
-
-- previous mode
-- new mode
-- confidence history
-- triggering signals / evidence
-
-This telemetry is mandatory for:
-- debugging
-- behavioral analysis
-- post-incident review
+If mode stabilization is implemented later, the change MUST add a runtime consumer, tests proving transition semantics, bounded configuration validation, and telemetry showing the applied mode source.
 
 [Back to top](#navigation)
 
 ---
 
-## 8. Summary
+## 5. Closing Statement
 
-Mode hysteresis:
+The live stability surface is the subset of runtime configuration that current components actually consume. Persisted compatibility keys MUST NOT be documented as effective behavior until a runtime reader exists.
 
-- improves user experience
-- preserves engineering rigor
-- aligns with human cognitive patterns
-- does not weaken determinism
-
-[cite_start]It is a **stability layer**, not an intelligence feature. [cite: 335]
+[Back to top](#navigation)
 
 ---
 

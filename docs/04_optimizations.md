@@ -1,471 +1,99 @@
-
-# CONTROL-PLANE EXECUTION OPTIMIZATIONS
-## Latency, Parallelism, and Deterministic Speculation
-### Foundational Engineering Specification (Document 04 of 12)
+# EXECUTION OPTIMIZATIONS
+## Current Fast Paths, Budgets, and Explicit Backlog
+### Foundational Engineering Specification (Document 04 of 14)
 *Namespace: memory-steward • Owner: architecture-team*
 
 ---
 
 ## Navigation
-**← [Prev: Document 03 (Reference)](03_reference.md) | [cite_start][Next: Document 05 (Stability)](05_stability.md) →** [cite: 531]
+
+**← [Prev: Document 03 (Reference Memory)](03_reference.md) | [Next: Document 05 (Stability)](05_stability.md) →**
 
 - [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. Purpose](#1-purpose)
-- [2. Problem Statement](#2-problem-statement)
-- [3. Principle: Determinism First, Performance Second](#3-principle-determinism-first-performance-second)
-- [4. [cite_start]Speculative Routing (Primary Optimization)](#4-speculative-routing-primary-optimization) [cite: 532]
-- [5. Semantic Caching (The Fast Path)](#5-semantic-caching-the-fast-path)
-- [6. Scatter-Gather Speculation (Parallel Gating)](#6-scatter-gather-speculation-parallel-gating)
-- [7. Asynchronous Context Loading](#7-asynchronous-context-loading)
-- [8. [cite_start]Ingestion and Versioning Optimizations](#8-ingestion-and-versioning-optimizations) [cite: 533]
-- [9. [cite_start]Explicit Non-Goals](#9-explicit-non-goals) [cite: 534]
-- [10. Prompt Envelope Serialization (Implementation)](#10-prompt-envelope-serialization-implementation)
-- [11. Summary](#11-summary)
-
+- [1. Implemented](#1-implemented)
+- [2. Not Implemented](#2-not-implemented)
+- [3. Telemetry Caveat](#3-telemetry-caveat)
+- [4. Optimization Rule](#4-optimization-rule)
+- [5. Closing Statement](#5-closing-statement)
 
 ---
 
 ## 0. Status, Scope, and Authority
 
-**Status:** FOUNDATIONAL
-**Audience:** Core maintainers, performance engineers
-**Change policy:**
-- Append-only
-- No silent edits
+**Status:** PARTIAL
+**Audience:** Maintainers and performance engineers
+**Change policy:** Living implementation-aligned document; no silent behavioral drift.
 
-This document defines non-canonical execution optimizations.
+This document separates optimizations present in code from ideas that are not implemented.
 
 [Back to top](#navigation)
 
 ---
 
-## 1. Purpose
+## 1. Implemented
 
-[cite_start]This document defines **non-canonical execution optimizations** applicable to the Memory Steward and Router control plane. [cite: 535]
-These optimizations:
-- improve throughput and latency
-- preserve determinism
-- preserve authority boundaries
-- preserve auditability
+### 1.1 Structured Retrieval Reuse
 
-All mechanisms described here are:
-- **optional**
-- **orthogonal**
-- **non-semantic**
-- **non-authoritative**
+Chat and AMP retrieval use the same structured Router retrieval operation before presentation-specific rendering. Agent retrieval can return context without invoking the Builder.
 
-They must **never alter** canonical semantics defined in Documents 1–3.
+### 1.2 Bounded Retrieval
 
-[Back to top](#navigation)
+The Router applies bounded prefetch/top-k values, MMR selection, and a maximum context-token budget. Static and dynamic/reference context accounting is emitted to telemetry.
 
----
+### 1.3 Runtime Token Budget
 
-## 2. Problem Statement
+`MAX_CONTEXT_TOKENS` can be persisted in `runtime_config`; the Router periodically reloads this key and applies it to subsequent requests.
 
-The canonical request lifecycle enforces a serial dependency:
+### 1.4 Async Chat Admission Dispatch
 
-1. Steward classifies Mode and Intent
-2. Steward gates memory eligibility
-3. Router assembles prompt
-4. Model performs inference
+After a chat response, Router admission is dispatched to Memory Steward asynchronously. Admission failure does not replace a successful Builder response.
 
-This yields:
+### 1.5 Builder Runtime Selection
 
-$$T_{total} = T_{steward} + T_{router} + T_{model}$$
-
-While architecturally correct, this introduces **pre-inference latency**, where $T_{steward}$ may dominate in high-throughput or interactive scenarios.
+The Router can consume persisted `BUILDER_BASE_URL` and `BUILDER_MODEL` runtime keys. The current configuration module still requires `BUILDER_MODEL` at process startup, so the model-discovery helper is not a normal fallback path in the deployed contract.
 
 [Back to top](#navigation)
 
 ---
 
-## 3. Principle: Determinism First, Performance Second
+## 2. Not Implemented
 
-Any optimization MUST preserve the following invariants:
+The current tree does not implement the following previously discussed optimizations:
 
-- [cite_start]Steward remains the **sole authority** for: [cite: 536]
-  - operational mode
-  - intent classification
-  - memory eligibility
-- Router execution must be **fully discardable**
-- Model output must **never influence** control-plane decisions
-- Incorrect speculative execution must be **abortable without side effects**
+- speculative mode routing;
+- scatter/gather retrieval across predicted modes;
+- semantic cache for mode classification;
+- static-memory preload cache in the Router;
+- reference-memory shadow collections + atomic alias switching;
+- a GitOps operator that watches a knowledge manifest.
 
-[cite_start]Performance is subordinate to correctness. [cite: 537]
-
-[Back to top](#navigation)
-
----
-
-## 4. Speculative Routing (Primary Optimization)
-
-### 4.1 Concept
-
-[cite_start]Speculative routing allows the Router to **begin prompt assembly** before the Steward has finalized classification. [cite: 538]
-[cite_start]This is done using a **predicted operational mode**, while the Steward executes classification **in parallel**. [cite: 539]
-
-### 4.2 Execution Flow
-
-~~~text
-User Request
-     |
-     +--> Steward (classification) -----------+
-     |                                        |
-+--> Router (speculative assembly)       |
-                                              |
-Steward Result ------+
-                                 |
-Validate / Abort
-~~~
-
-### 4.3 Speculation Rules
-
-Speculation is permitted only when **all** of the following hold:
-
-- Prior mode confidence ≥ configured threshold
-- No explicit mode override is present
-- Session state is stable (no recent mode transitions)
-
-[cite_start]The speculative assumption MUST be the **most restrictive plausible mode**. [cite: 543]
-
-### 4.4 Abort Semantics
-
-If the Steward’s authoritative result differs from the speculative assumption:
-- [cite_start]Router MUST discard the partially assembled prompt. [cite: 544]
-- Router MUST re-assemble using authoritative classification.
-- [cite_start]No speculative context may reach the Model. [cite: 545]
-Abort behavior MUST be silent and complete.
+These are backlog/design ideas, not runtime guarantees.
 
 [Back to top](#navigation)
 
 ---
 
-## 5. Semantic Caching (The Fast Path)
+## 3. Telemetry Caveat
 
-[cite_start]To significantly reduce $T_{steward}$, the system MAY implement a semantic cache for mode classification. [cite: 546]
-
-### 5.1 Mechanism
-- [cite_start]Store the embedding of the user's prompt mapped to the Steward's classification (`Mode` + `Intent`). [cite: 547]
-- [cite_start]**TTL Required:** Cache entries must expire (e.g., 24h) to prevent stale behavioral rules. [cite: 548]
-
-### 5.2 Lookup Logic
-On a new request:
-1. Embed the input.
-2. [cite_start]Query the cache. [cite: 549]
-3. If a hit is found with **high similarity** (e.g., $>0.95$):
-   - [cite_start]Bypass the Steward LLM entirely. [cite: 550]
-   - Use the cached mode.
-
-[cite_start]**Benefit:** Reduces $T_{steward}$ from LLM inference time (~400ms+) to Vector lookup time (~10ms) for recurrent patterns. [cite: 551]
+Router telemetry writes are synchronous best-effort Postgres calls with short connection timeouts. They are failure-isolated, but they are not an asynchronous telemetry queue.
 
 [Back to top](#navigation)
 
 ---
 
-## 6. Scatter-Gather Speculation (Parallel Gating)
+## 4. Optimization Rule
 
-[cite_start]This optimization refines standard Speculative Routing by trading compute resources for latency reduction. [cite: 552]
-
-### 6.1 Mechanism
-[cite_start]Instead of speculating on a single mode, the Router initiates retrieval for the **top-N** (e.g., 2) most likely modes immediately and in parallel. [cite: 553]
-
-### 6.2 Barrier Synchronization
-1. **Launch:** Router spawns retrieval threads for Mode A and Mode B.
-2. [cite_start]**Barrier:** Threads halt at the "Prompt Assembly" phase. [cite: 554]
-3. [cite_start]**Commit:** When Steward returns the authoritative mode (e.g., Mode A), the Router instantly **commits** the matching thread and **discards** the others. [cite: 555]
-
-**Benefit:** Eliminates the "Abort & Retry" penalty. [cite_start]The correct branch is always ready; incorrect branches are simply dropped. [cite: 556]
+An optimization MUST preserve API semantics, memory-type isolation, deterministic filter construction, and selection/budget accounting. If it changes observable behavior, it requires tests and documentation in the same change set.
 
 [Back to top](#navigation)
 
 ---
 
-## 7. Asynchronous Context Loading
+## 5. Closing Statement
 
-[cite_start]Decouples non-blocking operations from the critical request path. [cite: 557]
-
-### 7.1 Static Memory Pre-load
-- [cite_start]`static_global` memory SHOULD be pre-loaded into hot memory (RAM) at system startup. [cite: 558]
-- [cite_start]Do not fetch static rules from the database per request. [cite: 559]
-
-### 7.2 Background Telemetry
-- [cite_start]Telemetry writes (`telemetry.request_end`, `telemetry.step`) MUST be written asynchronously (e.g., via background worker or `asyncio.create_task`). [cite: 560]
-- [cite_start]**Hard Invariant:** Never block the HTTP response waiting for a database write. [cite: 561]
+Optimization claims in this repository MUST be grounded in current code. Speculation, semantic caches, and other future fast paths remain non-contractual until implemented and covered by executable tests.
 
 [Back to top](#navigation)
-
----
-
-## 8. Ingestion and Versioning Optimizations
-
-[cite_start]While primarily operational, these optimizations ensure that **Reference Memory** updates do not impact runtime latency or availability. [cite: 562]
-
-### 8.1 Knowledge-as-Code (GitOps)
-[cite_start]Treat memory ingestion as a deployment pipeline, not a database operation. [cite: 563]
-- [cite_start]**Source of Truth:** A Git repository containing a `knowledge.yaml` manifest. [cite: 564]
-  ~~~yaml
-  - product: "terraform"
-    version: "1.6.0"
-    status: "active"
-    source_url: "..."
-  ~~~
-- **Ingestion Operator:** A service watches this repo.
-  On version bump:
-  1. [cite_start]Ingests/embeds new docs into a **shadow namespace**. [cite: 565]
-  2. Runs sanity checks (chunk count, embedding distribution).
-  3. [cite_start]Marks old version as `archived`. [cite: 566]
-
-### 8.2 Atomic Alias Switching
-[cite_start]To prevent downtime during updates, use **Collection Aliasing**. [cite: 567]
-- **Physical Storage:** Immutable collections (`ref_terraform_v1_5`, `ref_terraform_v1_6`).
-- [cite_start]**Logical Alias:** Router queries `ref_terraform_active`. [cite: 568]
-- **Switching:** The Operator updates the alias pointer in a single atomic operation.
-
-[cite_start]**Benefit:** Zero downtime for knowledge updates; instant rollback capability. [cite: 569]
-
-### 8.3 Strict Schema Enforcement
-[cite_start]A validation layer MUST exist before embedding. [cite: 570]
-- **Mechanism:** Use Pydantic/JSON Schema to validate every chunk.
-- [cite_start]**Check:** Ensure `product`, `version`, and `scope` match Control Plane enums. [cite: 571]
-- [cite_start]**Benefit:** Prevents "metadata pollution" and fragmentation (e.g., "Terraform" vs "terraform-core"). [cite: 572]
-
-[Back to top](#navigation)
-
----
-
-## 9. Explicit Non-Goals
-
-This document explicitly forbids:
-
-- Model-driven speculation
-- Partial prompt reuse across modes
-- Heuristic or probabilistic memory injection
-- Latency-driven weakening of gates
-- Any optimization that changes canonical behavior
-
-[Back to top](#navigation)
-
----
-
-## 10. Prompt Envelope Serialization (Implementation)
-
-This section defines implementation mechanics for constructing and serializing
-the canonical prompt envelope.
-
-This section is:
-
-- non-canonical
-- transport-level
-- implementation-scoped
-
-It does not redefine canonical semantics from Documents 01–03.
-
-[Back to top](#navigation)
-
----
-
-### 10.1 Canonical Envelope Construction
-
-Before any provider call, the Router MUST construct a fully explicit canonical envelope.
-
-Required top-level blocks:
-
-- `policy_layer`
-- `enforcement_protocol`
-- `system_ontology`
-- `retrieval_context`
-- `dialogue_state`
-- `current_objective`
-- `final_reminder`
-
-Rules:
-
-- Block names MUST remain stable.
-- Block order MUST remain deterministic.
-- Unused blocks MUST still be present as empty objects.
-- Provider-specific fields are forbidden at this stage.
-
-[Back to top](#navigation)
-
----
-
-### 10.2 Builder Canonical Envelope Schema
-
-Builder MUST receive full canonical structure.
-
-Example schema:
-
-~~~json
-{
-  "policy_layer": {
-    "language": "English only",
-    "style": "Technical, precise, no fluff",
-    "format_requirements": [],
-    "non_negotiable_rules": []
-  },
-  "enforcement_protocol": {
-    "steps": [
-      "Read policy_layer.",
-      "Interpret current_objective.",
-      "Generate response.",
-      "Verify compliance with policy_layer."
-    ]
-  },
-  "system_ontology": {
-    "project_name": "Memory Steward",
-    "core_components": [],
-    "definitions": {}
-  },
-  "retrieval_context": {
-    "relevance_filtered_facts": []
-  },
-  "dialogue_state": {
-    "recent_summary": "",
-    "active_constraints": []
-  },
-  "current_objective": {
-    "instruction": "",
-    "expected_properties": []
-  },
-  "final_reminder": "Ensure compliance with policy_layer before producing final output."
-}
-~~~
-
-Constraints:
-
-- No memory admission directives allowed.
-- No Steward classification metadata allowed.
-- No control-plane reasoning metadata allowed.
-
-[Back to top](#navigation)
-
----
-
-### 10.3 Steward Canonical Envelope Schema
-
-Steward MUST use identical top-level structure.
-
-Example schema:
-
-~~~json
-{
-  "policy_layer": {
-    "admission_rules": [
-      "Store only stable user-asserted facts.",
-      "Reject transient or emotional language.",
-      "Detect contradictions with existing memory."
-    ]
-  },
-  "enforcement_protocol": {
-    "steps": [
-      "Read policy_layer.",
-      "Interpret current_objective.",
-      "Compare new input against retrieval_context.",
-      "Produce strict JSON decision."
-    ]
-  },
-  "system_ontology": {
-    "project_name": "Memory Steward",
-    "core_components": [],
-    "definitions": {}
-  },
-  "retrieval_context": {
-    "relevance_filtered_facts": []
-  },
-  "dialogue_state": {
-    "recent_summary": "",
-    "active_constraints": []
-  },
-  "current_objective": {
-    "task": "memory_admission",
-    "new_input": "",
-    "decision_required": [
-      "extract_facts",
-      "detect_updates",
-      "detect_conflicts",
-      "ignore_noise"
-    ]
-  },
-  "final_reminder": "Output MUST be strict JSON only."
-}
-~~~
-
-Steward output MUST be strict JSON only.
-
-[Back to top](#navigation)
-
----
-
-### 10.4 Provider Adapter Contract
-
-After canonical envelope construction, the provider adapter performs transport serialization.
-
-Example (OpenAI-style mapping):
-
-~~~json
-{
-  "model": "gpt-x",
-  "messages": [
-    {
-      "role": "system",
-      "content": "<serialized canonical envelope>"
-    }
-  ],
-  "temperature": 0.2
-}
-~~~
-
-The adapter MUST NOT:
-
-- Rename canonical blocks
-- Reorder canonical blocks
-- Merge Builder and Steward envelopes
-- Inject provider metadata into canonical object
-
-Provider mapping is transport-only.
-
-[Back to top](#navigation)
-
----
-
-### 10.5 Token Budget Enforcement
-
-Token enforcement occurs after envelope construction and before dispatch.
-
-Blocks that MUST NOT be truncated:
-
-- `policy_layer`
-- `enforcement_protocol`
-- `current_objective`
-- `final_reminder`
-
-Lower-priority blocks MAY be truncated:
-
-- `retrieval_context`
-- `dialogue_state`
-
-Trimming MUST preserve:
-
-- Structural validity
-- Deterministic ordering
-- Canonical semantics
-
-[Back to top](#navigation)
-
----
-
-## 11. Summary
-
-| Challenge | Solution | Key Benefit |
-| :--- | :--- | :--- |
-| **Latency ($T_{steward}$)** | **Semantic Caching** | [cite_start]Skips LLM inference for common queries. [cite: 574] |
-| **Latency (Speculation)** | **Scatter-Gather** | [cite_start]Removes "Abort & Retry" penalty; parallelizes retrieval. [cite: 575] |
-| **Latency (Writes)** | **Async/Backgrounding** | Telemetry writes never block user response. |
-| **Namespace (Ops)** | **GitOps / Knowledge-as-Code** | [cite_start]Audit trail, CI/CD for data, automated ingestion. [cite: 577] |
-| **Namespace (Safety)** | **Atomic Aliasing** | Zero-downtime updates, instant rollbacks. |
-
-[cite_start]Control-plane execution optimizations are acceptable **only** when they preserve determinism and authority boundaries. [cite: 578]
-[cite_start]Speculative routing and caching are **performance enhancements**, not behavioral changes. [cite: 579]
 
 ---
 

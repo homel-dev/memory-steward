@@ -1,117 +1,137 @@
-<img src="docs/img/logo2.jpeg" width="100">
-
-# MEMORY STEWARD
-## A Deterministic Cognitive Control Plane for LLM Systems
-### Foundational Engineering Specification (Root Document)
-*Namespace: memory-steward • Owner: architecture-team*
-
+# Memory Steward
 
 [![CI](https://github.com/homel-dev/memory-steward/actions/workflows/main.yml/badge.svg)](https://github.com/homel-dev/memory-steward/actions/workflows/main.yml)
-[![Python](https://img.shields.io/badge/python-3.13-4a8ab8)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-4a8a5a)](LICENSE-2.0.txt)
-[![homel.dev](https://img.shields.io/badge/org-homel.dev-6a5a9a)](https://hommel.dev)
+[![Build images](https://github.com/homel-dev/memory-steward/actions/workflows/build_image.yml/badge.svg)](https://github.com/homel-dev/memory-steward/actions/workflows/build_image.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE-2.0.txt)
 
----
+Memory Steward is a self-hosted memory control plane for LLM and agent workloads. It separates retrieval, admission, operator control, transcription, storage, and observability into explicit services with narrow contracts.
 
-## Navigation
-**← [Prev: Contributing](CONTRIBUTING.md) | [Next: Architecture Cheat Sheet](ARCHITECTURE_CHEAT_SHEET.md) →**
+## Runtime architecture
 
-- [0. Status, Scope, and Authority](#0-status-scope-and-authority)
-- [1. What is this?](#1-what-is-this)
-- [2. Documentation Index](#2-documentation-index)
-- [3. Architecture & Standards](#3-architecture--standards)
-- [4. Quick Start (Deployment)](#4-quick-start-deployment)
-- [5. License](#5-license)
-- [6. Closing Statement](#6-closing-statement)
+| Component | Responsibility |
+| --- | --- |
+| `memory-router` | OpenAI-compatible chat ingress, project resolution, static/dynamic/reference retrieval, MMR, token budgeting, prompt-envelope rendering, Builder dispatch, async chat admission |
+| `memory-steward` | Durable-memory admission from chat turns and structured agent outcomes; canonical `agent_reference` persistence; context feedback |
+| `memory-steward-mcp` | Internal operator/agent control surface implemented with FastMCP |
+| `memory-steward-list` | Optional local speech transcription service; translation endpoint is present but currently returns HTTP 501 |
+| `embeddings` | Dense embedding service used by Router and Steward |
+| Postgres | Canonical structured state, runtime configuration, telemetry, ingestion records, agent artifacts |
+| Qdrant | Semantic retrieval index for dynamic and canonical reference memory |
+| Open WebUI | Optional chat/operator frontend; `/glap` is bridged by Memory Router to the MCP server |
+| Vector | Cluster log collection |
+| OCO | Shared Grafana presentation plane; Memory Steward publishes datasource/dashboard ConfigMaps |
 
----
+The code is the runtime authority. Documentation describes the behavior present in the current tree; proposals that are not implemented are explicitly marked as such.
 
-## 0. Status, Scope, and Authority
+## Request paths
 
-**Status:** ACTIVE / CANONICAL
-**Audience:** General Engineering Public
-**Change policy:**
-- Append-only
-- No silent edits
+### Chat
 
-**Documentation:** [docs/](docs/)
+~~~text
+Open WebUI / OpenAI client
+  -> POST /v1/chat/completions (memory-router)
+  -> static + dynamic + eligible reference retrieval
+  -> MMR + token budget
+  -> canonical context envelope
+  -> Builder LLM
+  -> response
+  -> async POST /admit (memory-steward)
+~~~
 
-[Back to top](#navigation)
+### Agent Memory Protocol
 
----
+~~~text
+Agent
+  -> POST /v1/context/retrieve (memory-router)
+     or memory.retrieve_context (MCP)
+  -> structured governed context, no Builder call
 
-## 1. What is this?
+Agent
+  -> POST /v1/agent/outcomes (memory-steward)
+     or memory.submit_agent_outcome (MCP)
+  -> governed durable-memory extraction + canonical agent_reference artifacts
+~~~
 
-Memory Steward is not a chatbot. It is a **Cognitive Control Plane** that enforces determinism, safety, and long-term memory coherence on top of probabilistic LLMs.
+### Operator control
 
-It separates **Reasoning** (The Model) from **Memory & Policy** (The Steward), ensuring that critical invariants—like safety rules, personality constraints, and authoritative facts—are never hallucinated or forgotten.
+The MCP service is ClusterIP-only. Operators do not need to expose it publicly. The repository provides Task wrappers that execute the FastMCP client inside the MCP pod:
 
-[Back to top](#navigation)
+~~~bash
+task ops:mcp:tools
+task ops:mcp:call -- ref_list
+task ops:ref:inspect -- product=kicad version=9.0 limit=10
+task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
+task ops:mcp:forward
+~~~
 
----
+FastMCP discovers tool schemas from the live server, so this CLI path does not duplicate the MCP contract. Open WebUI and `/glap` remain available as an optional conversational operator surface.
 
-## 2. Documentation Index
+## Operational mode: current behavior
 
-The system is fully specified in the `docs/` directory.
+There is currently **no mode classifier** in `memory-steward`.
 
-### 2.1 For Architects (The "Why")
-- **[01_overview.md](docs/01_overview.md):** System architecture, taxonomy, and core invariants.
-- **[10_industry_landscape.md](docs/10_industry_landscape.md):** Why we built this (vs. RAG/LangChain).
-- **[11_design_principles.md](docs/11_design_principles.md):** Async semantics and storage philosophy.
+`mode` is optional caller-supplied metadata. The Router uses it for:
 
-### 2.2 For Engineers (The "How")
-- **[02_operational_mode.md](docs/02_operational_mode.md):** How the system decides "Engineering" vs "Casual".
-- **[03_reference.md](docs/03_reference.md):** How to ingest documentation (Reference Memory).
-- **[04_optimizations.md](docs/04_optimizations.md):** Caching, Speculation, and Latency tuning.
-- **[05_stability.md](docs/05_stability.md):** Hysteresis loops to prevent mode jitter.
+- selecting `static_mode_conditioned` rows when a matching mode is supplied;
+- reference-memory eligibility (`engineering`, `implementation`, `formal_spec`).
 
-### 2.3 For Operators (The "Now")
-- **[06_telemetry.md](docs/06_telemetry.md):** Metrics, Dashboards, and SQL schemas.
-- **[07_glass_pane.md](docs/07_glass_pane.md):** The "Glass Pane" management interface (MCP).
-- **[09_runtime_contract.md](docs/09_runtime_contract.md):** Env vars, Ports, and C4 Architecture.
+When `mode` is absent, only global static rules match, while the reference lane currently uses `engineering` as its fallback eligibility mode. `FORCE_MODE` and `HYSTERESIS_WINDOW` can be persisted by legacy MCP tools, but the current Router does not consume those keys; they therefore have no runtime effect.
 
-### 2.4 For QA & Maintainers
-- **[08_verification.md](docs/08_verification.md):** The "Definition of Done" and regression tests.
-- **[00_style_guide.md](docs/00_style_guide.md):** Documentation standards.
+## Reference memory: current behavior
 
-[Back to top](#navigation)
+Canonical reference memory is ingested explicitly through MCP content-plane tools (`ref_ingest_url`, `ref_ingest_text`) and stored/indexed with `memory_type=reference_memory`.
 
----
+Router retrieval always filters on `memory_type=reference_memory`. Optional exact-match `reference_filters` may narrow by:
 
-## 3. Architecture & Standards
+- `product`
+- `version`
+- `scope`
+- `provider`
+- `source`
 
-Memory Steward is not just a codebase; it is a reference implementation of the **Dual-Plane Memory Architecture**. We adhere to strict engineering standards to prevent "Probabilistic Drift" in production systems. For deep dives and architectural reasoning, please refer to our core documentation:
+No product/version narrowing is synthesized when the caller omits filters.
 
-- **[Technical White Paper](./docs/WHITEPAPER.md):** *The "Engineering Manifesto." Explains the philosophy of Determinism, the "Alignment Tax" of memory, and why we split the system into Data and Control planes.*
-- **[RFC Standard (Proposal)](./RFC_PROPOSAL.md):** *The formal specification for the Dual-Plane Architecture. Defines the strict separation of concerns, async admission contracts, and atomic storage requirements.*
-- **[Architecture Cheat Sheet](./ARCHITECTURE_CHEAT_SHEET.md):** *A high-density one-pager for System Operators. Contains the C4 System Map, Env Variable Reference, and MCP Tool definitions for quick lookup.*
+## Lifecycle
 
-[Back to top](#navigation)
+~~~bash
+task up
+task status:all
+task ops:service:status
+task ops:service:wait
+task ops:service:restart
+task down
+~~~
 
----
+`task build` is a separate developer helper that creates `homel/*:dev` images inside Minikube. The checked-in Kubernetes manifests still reference GHCR images, so `task build` does **not** change what `task up` deploys unless the manifests/image policy are explicitly overridden.
 
-## 4. Quick Start (Deployment)
+Stateful Postgres and Qdrant restarts are intentionally separate and prompted:
 
-See **[DEPLOYMENT.md](DEPLOYMENT.md)** for Kubernetes instructions.
+~~~bash
+task ops:storage:restart:postgres
+task ops:storage:restart:qdrant
+~~~
 
-[Back to top](#navigation)
+## Validation
 
----
+The repository CI runs component tests and Ruff checks. Before merging changes, run the equivalent component commands locally or in CI and verify the Kubernetes manifests/tasks against the target cluster.
 
-## 5. License
+## Documentation
 
-Apache License 2.0
+- [`docs/00_style_guide.md`](docs/00_style_guide.md) — documentation rules and authority
+- [`docs/01_overview.md`](docs/01_overview.md) — implemented architecture
+- [`docs/02_operational_mode.md`](docs/02_operational_mode.md) — current mode semantics
+- [`docs/03_reference.md`](docs/03_reference.md) — canonical reference memory
+- [`docs/04_optimizations.md`](docs/04_optimizations.md) — implemented optimizations and explicit backlog
+- [`docs/05_stability.md`](docs/05_stability.md) — live configuration and non-implemented stability features
+- [`docs/06_telemetry.md`](docs/06_telemetry.md) — telemetry model
+- [`docs/07_glass_pane.md`](docs/07_glass_pane.md) — MCP/operator surfaces
+- [`docs/08_verification.md`](docs/08_verification.md) — verification expectations
+- [`docs/09_runtime_contract.md`](docs/09_runtime_contract.md) — runtime topology/configuration
+- [`docs/10_industry_landscape.md`](docs/10_industry_landscape.md) — background research
+- [`docs/11_design_principles.md`](docs/11_design_principles.md) — design principles
+- [`docs/12_extensions.md`](docs/12_extensions.md) — optional LIST and AMP extensions
+- [`docs/13_admission_control.md`](docs/13_admission_control.md) — provisioned admission-control schema plus proposed runtime pipeline; current active boundary is explicit
 
-See [LICENSE](LICENSE-2.0.txt) file for details.
+## License
 
-[Back to top](#navigation)
-
----
-
-## 6. Closing Statement
-
-This repository constitutes the definitive implementation of the Memory Steward, operating strictly within the invariants defined by the core engineering specifications.
-
----
-
-**END OF DOCUMENT README**
+Apache-2.0. See [`LICENSE-2.0.txt`](LICENSE-2.0.txt).
