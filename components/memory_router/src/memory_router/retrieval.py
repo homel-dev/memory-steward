@@ -10,7 +10,7 @@ import tiktoken
 from sklearn.metrics.pairwise import cosine_similarity
 
 from memory_router import config
-from memory_router.schemas import ArtifactSelector, Candidate, ChatMessage, REFERENCE_FILTER_FIELDS
+from memory_router.schemas import REFERENCE_FILTER_FIELDS, ArtifactSelector, Candidate, ChatMessage
 from memory_router.state import telemetry
 
 log = logging.getLogger("uvicorn.error")

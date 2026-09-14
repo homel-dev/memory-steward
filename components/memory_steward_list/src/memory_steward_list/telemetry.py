@@ -3,9 +3,8 @@ Telemetry alignment for LIST.
 Implements structured logging to satisfy Document 06 (Diagnostics Plane).
 """
 
-import logging
 import json
-import time
+import logging
 from typing import Optional
 
 # Configure root logger to output JSON-friendly format if needed.

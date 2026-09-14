@@ -6,8 +6,10 @@ Supports refresh, eviction, and thread-safe access.
 import threading
 import time
 from typing import Any, Dict, List, Optional
-from memory_steward_mcp.config import QDRANT_URL, QDRANT_COLLECTION, STATIC_MEMORY_REFRESH_SECONDS
+
 import qdrant_client
+
+from memory_steward_mcp.config import QDRANT_COLLECTION, QDRANT_URL, STATIC_MEMORY_REFRESH_SECONDS
 
 qdrant = qdrant_client.QdrantClient(QDRANT_URL, timeout=5)
 
@@ -29,7 +31,7 @@ class StaticMemoryCacheManager:
 
     @classmethod
     def _load_static_memory(cls, memory_type: str, mode: Optional[str] = None) -> List[Dict[str, Any]]:
-        from qdrant_client.http.models import Filter, FieldCondition, MatchValue
+        from qdrant_client.http.models import FieldCondition, Filter, MatchValue
         payload_filter = [
             FieldCondition(key="memory_type", match=MatchValue(value=memory_type))
         ]

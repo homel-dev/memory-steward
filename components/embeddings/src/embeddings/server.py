@@ -2,8 +2,8 @@ import os
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 from fastembed import TextEmbedding
+from pydantic import BaseModel
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "BAAI/bge-small-en-v1.5")
 

@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 
 import memory_router.server as router
 
-
 client = TestClient(router.app)
 
 

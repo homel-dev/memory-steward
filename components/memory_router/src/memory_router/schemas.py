@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
-
 REFERENCE_FILTER_FIELDS: Dict[str, str] = {
     "product": "product",
     "version": "version",

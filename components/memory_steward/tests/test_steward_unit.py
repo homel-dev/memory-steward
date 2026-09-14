@@ -10,11 +10,10 @@ Covers:
 - SPECULATIVE_RE matching
 - _extract response parsing (mocked LLM)
 """
+import importlib
 import sys
 import types
 import uuid
-import pytest
-import importlib
 from unittest.mock import MagicMock, patch
 
 # Stub heavy imports

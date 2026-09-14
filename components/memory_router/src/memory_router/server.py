@@ -16,22 +16,6 @@ import memory_router.schemas as schemas_core
 import memory_router.upstream as upstream_core
 from memory_router import config
 from memory_router.mcp_bridge import handle_glap
-from memory_router.request_context import (
-    glap_stream_generator as _glap_stream_generator,
-    origin_base as _origin_base,
-    project_id as _project_id,
-)
-from memory_router.retrieval import (
-    count_tokens as _count_tokens,
-    embed_one as _embed_one,
-    pg_agent_reference_load as _pg_agent_reference_load,
-    pg_static_load as _pg_static_load,
-    qdrant_dense as _qdrant_dense,
-    qdrant_reference as _qdrant_reference,
-    qdrant_reference_get as _qdrant_reference_get,
-    reference_candidate_payload as _reference_candidate_payload,
-    render_context_envelope as _render_context_envelope,
-)
 from memory_router.schemas import (
     ArtifactSelector,
     ChatCompletionRequest,
@@ -40,11 +24,6 @@ from memory_router.schemas import (
     ReferenceSearchRequest,
 )
 from memory_router.state import telemetry
-from memory_router.upstream import (
-    async_admit as _async_admit,
-    builder_openai_url as _builder_openai_url,
-    get_builder_default_model as _get_builder_default_model,
-)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,6 +33,21 @@ log = logging.getLogger("uvicorn.error")
 
 # Compatibility exports for internal tests and existing imports. Runtime values
 # themselves are owned by their focused modules.
+_glap_stream_generator = request_context_core.glap_stream_generator
+_origin_base = request_context_core.origin_base
+_project_id = request_context_core.project_id
+_count_tokens = retrieval_core.count_tokens
+_embed_one = retrieval_core.embed_one
+_pg_agent_reference_load = retrieval_core.pg_agent_reference_load
+_pg_static_load = retrieval_core.pg_static_load
+_qdrant_dense = retrieval_core.qdrant_dense
+_qdrant_reference = retrieval_core.qdrant_reference
+_qdrant_reference_get = retrieval_core.qdrant_reference_get
+_reference_candidate_payload = retrieval_core.reference_candidate_payload
+_render_context_envelope = retrieval_core.render_context_envelope
+_async_admit = upstream_core.async_admit
+_builder_openai_url = upstream_core.builder_openai_url
+_get_builder_default_model = upstream_core.get_builder_default_model
 _sha256_hex = request_context_core.sha256_hex
 _extract_static_rules = retrieval_core.extract_static_rules
 _maximal_marginal_relevance = retrieval_core.maximal_marginal_relevance

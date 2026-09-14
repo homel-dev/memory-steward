@@ -1,7 +1,7 @@
 # memory_steward/telemetry.py
 import logging
-from typing import Optional
 from datetime import datetime, timezone
+from typing import Optional
 
 import psycopg
 

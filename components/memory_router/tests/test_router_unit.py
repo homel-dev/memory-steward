@@ -14,13 +14,11 @@ Covers:
 import importlib
 import sys
 import types
-import pytest
 from unittest.mock import MagicMock, patch
-
 
 # ---------------------------------------------------------------------------
 # Stub only what is NOT installed in this venv.
-# numpy and sklearn are real deps — do NOT stub them.
+# numpy, sklearn, and tiktoken are real deps — do NOT stub them.
 # ---------------------------------------------------------------------------
 
 def _stub_module(name, **attrs):
@@ -32,10 +30,6 @@ def _stub_module(name, **attrs):
 
 
 _stub_module("psycopg", connect=MagicMock())
-_stub_module("tiktoken",
-    encoding_for_model=MagicMock(return_value=MagicMock(encode=lambda t: t.split())),
-    get_encoding=MagicMock(return_value=MagicMock(encode=lambda t: t.split())),
-)
 _stub_module("memory_router.telemetry", TelemetryWriter=MagicMock())
 _stub_module("memory_router.mcp_bridge", handle_glap=MagicMock())
 

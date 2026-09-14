@@ -1,4 +1,4 @@
-# Memory Steward
+# <img src="docs/img/logo2.jpeg" width="100" alt="Memory Steward logo"> Memory Steward
 
 [![CI](https://github.com/homel-dev/memory-steward/actions/workflows/main.yml/badge.svg)](https://github.com/homel-dev/memory-steward/actions/workflows/main.yml)
 [![Build images](https://github.com/homel-dev/memory-steward/actions/workflows/build_image.yml/badge.svg)](https://github.com/homel-dev/memory-steward/actions/workflows/build_image.yml)

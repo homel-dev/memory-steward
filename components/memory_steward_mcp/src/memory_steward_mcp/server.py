@@ -4,33 +4,20 @@ Exposes an ASGI application for use with Uvicorn (HTTP Transport).
 """
 
 import logging
-import time
-import os
-import json
-import requests
 from functools import partial
-from collections import deque
-from typing import Optional
 
-# 3rd Party
+import requests
 from fastmcp import FastMCP
+from qdrant_client import QdrantClient
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
-from qdrant_client import QdrantClient
-import psycopg
 
-# Internal Config
-from memory_steward_mcp.config import (
-    QDRANT_URL, QDRANT_COLLECTION, POSTGRES_DSN, LOG_DIR,
-    MAX_CONTEXT_TOKENS, HYSTERESIS_WINDOW, APP_VERSION, EMBEDDINGS_URL
-)
-
-# Plane Registries
-from memory_steward_mcp.content_plane import register_content_tools, _ingest_text_internal
-from memory_steward_mcp.stability_plane import register_stability_tools
+from memory_steward_mcp.agent_plane import register_agent_tools
+from memory_steward_mcp.config import EMBEDDINGS_URL, QDRANT_URL
+from memory_steward_mcp.content_plane import _ingest_text_internal, register_content_tools
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
 from memory_steward_mcp.git_plane import register_git_tools
-from memory_steward_mcp.agent_plane import register_agent_tools
+from memory_steward_mcp.stability_plane import register_stability_tools
 
 # Configure Logging
 logging.basicConfig(level=logging.INFO)

@@ -4,7 +4,6 @@ Shared fixtures and environment setup for all tests.
 All external dependencies (Postgres, Qdrant, embeddings, LLM) are mocked.
 """
 import os
-import pytest
 
 # Patch all required env vars before any module import touches them
 os.environ.update({

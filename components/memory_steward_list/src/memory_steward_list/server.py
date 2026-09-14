@@ -9,6 +9,7 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+
 from memory_steward_list.config import APP_VERSION, WHISPER_MODEL_SIZE
 from memory_steward_list.service import TranscriptionService
 from memory_steward_list.telemetry import record_transcription

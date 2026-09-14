@@ -6,11 +6,12 @@ Doc 08 invariants tested:
   3.2 Async admission — no fragments is not an error
   Admission endpoint contract — required fields, response shape
 """
+import importlib
 import sys
 import types
-import pytest
-import importlib
 from unittest.mock import MagicMock, patch
+
+import pytest
 from fastapi.testclient import TestClient
 
 

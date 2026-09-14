@@ -9,14 +9,13 @@ All external dependencies are mocked. Covers:
 - Static rules always injected (Doc 08 §3.3)
 - /v1/models and /healthz endpoints
 """
+import importlib
 import json
 import sys
 import types
-import pytest
-import importlib
 from unittest.mock import MagicMock, patch
-from fastapi.testclient import TestClient
 
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Stub only non-installed deps before importing the router
@@ -31,10 +30,6 @@ def _stub(name, **attrs):
 
 
 _stub("psycopg", connect=MagicMock())
-_stub("tiktoken",
-    encoding_for_model=MagicMock(return_value=MagicMock(encode=lambda t: t.split())),
-    get_encoding=MagicMock(return_value=MagicMock(encode=lambda t: t.split())),
-)
 _stub("memory_router.telemetry", TelemetryWriter=MagicMock())
 _stub("memory_router.mcp_bridge",
     handle_glap=MagicMock(return_value=(200, {

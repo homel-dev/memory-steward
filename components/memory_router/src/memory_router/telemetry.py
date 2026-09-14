@@ -8,7 +8,6 @@ from typing import Any, Dict, Optional
 
 import psycopg
 
-
 log = logging.getLogger("memory-router.telemetry")
 
 # ------------------------------------------------------------------------------

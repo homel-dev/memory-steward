@@ -6,6 +6,7 @@ Aligned with Document 09 (Runtime) and Document 06 (Telemetry).
 
 import os
 
+
 def _env(name: str, default: str = None, required: bool = False) -> str:
     v = os.environ.get(name, default)
     if required and not v:

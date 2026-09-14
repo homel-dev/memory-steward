@@ -4,7 +4,6 @@ import sys
 import types
 from unittest.mock import MagicMock, patch
 
-
 fastmcp = types.ModuleType("fastmcp")
 fastmcp.FastMCP = object
 sys.modules.setdefault("fastmcp", fastmcp)
