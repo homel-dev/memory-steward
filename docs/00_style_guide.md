@@ -88,7 +88,7 @@ Architecture images SHOULD be represented as Mermaid source. If binary assets ar
 Numbered engineering specifications MUST begin with:
 
 ~~~markdown
-# [DOCUMENT TITLE IN CAPS]
+ # [DOCUMENT TITLE IN CAPS]
 ## [Descriptive Subtitle]
 ### Foundational Engineering Specification (Document XX of YY)
 *Namespace: memory-steward • Owner: architecture-team*

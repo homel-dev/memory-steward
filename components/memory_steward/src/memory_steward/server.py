@@ -186,7 +186,7 @@ def _extract(messages: List[Dict[str, str]], limit: int) -> List[str]:
 
     conversation_text = "\n".join(user_inputs).strip()
 
-    
+
     envelope = {
         "policy_layer": {
             "admission_rules": [

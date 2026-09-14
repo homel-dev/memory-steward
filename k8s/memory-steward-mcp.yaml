@@ -20,7 +20,7 @@ spec:
           ports:
             - containerPort: 8081
               name: sse
-          
+
           # 1. Runtime Configuration (Qdrant, Limits, Hysteresis, etc.)
           envFrom:
             - configMapRef:
@@ -33,11 +33,11 @@ spec:
                 secretKeyRef:
                   name: homel-postgres
                   key: POSTGRES_DSN
-            
+
             # Application name override for Postgres logs (optional but good for debugging)
             - name: PGDATABASE
-              value: "homel" 
-            
+              value: "homel"
+
             # Explicit Log Directory for the MCP tool to read from
             - name: LOG_DIR
               value: "/var/log/memory_steward_logs"

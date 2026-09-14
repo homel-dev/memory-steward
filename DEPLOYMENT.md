@@ -70,7 +70,7 @@ For a local MCP-capable application:
 
 ~~~bash
 task ops:mcp:forward
-# http://127.0.0.1:8081/mcp
+## http://127.0.0.1:8081/mcp
 ~~~
 
 ### 6. Direct Kubernetes Inspection

@@ -27,14 +27,14 @@ spec:
           imagePullPolicy: Always
           ports:
             - containerPort: 8001
-          
+
           # -----------------------------------------------------------
           # CONFIGURATION: Runtime Contract
           # -----------------------------------------------------------
           envFrom:
             - configMapRef:
                 name: homel-runtime-contract
-          
+
           # -----------------------------------------------------------
           # HARD INVARIANT (Doc 12):
           # NO POSTGRES SECRET MOUNTED.
@@ -44,14 +44,14 @@ spec:
           env:
             - name: HF_HOME
               value: /root/.cache/huggingface
-            
+
             # --- [GPU CONFIG SWITCH] ---
             # 1. For CPU (Default):
             - name: DEVICE
               value: "cpu"
             - name: COMPUTE_TYPE
               value: "int8"
-            
+
             # 2. For GPU (Uncomment these, comment out above):
             # - name: DEVICE
             #   value: "cuda"
@@ -59,7 +59,7 @@ spec:
             #   value: "float16"
             # - name: NVIDIA_VISIBLE_DEVICES
             #   value: "all"
-          
+
           resources:
             requests:
               memory: "2Gi"

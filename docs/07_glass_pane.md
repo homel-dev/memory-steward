@@ -83,7 +83,7 @@ The Task wrappers invoke FastMCP inside the already-deployed MCP pod, so the wor
 
 ~~~bash
 task ops:mcp:forward
-# http://127.0.0.1:8081/mcp
+## http://127.0.0.1:8081/mcp
 ~~~
 
 The port-forward binds loopback only. FastMCP can also derive a typed CLI from live tool schemas; a future full-screen TUI SHOULD remain a presentation layer over this same MCP contract rather than define another command API.
@@ -184,22 +184,22 @@ The repository does **not** currently register the old conceptual `mem://...`, `
 Reference ingestion is explicit and synchronous.
 
 ~~~bash
-# Discover the live schema first.
+## Discover the live schema first.
 task ops:mcp:tools:json
 
-# List current reference namespaces/events.
+## List current reference namespaces/events.
 task ops:ref:list
 
-# Inspect one product/version.
+## Inspect one product/version.
 task ops:ref:inspect -- product=kicad version=9.0 limit=10
 
-# Ingest a URL.
+## Ingest a URL.
 task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
 
-# Search canonical Reference Memory through the Router-owned agent API adapter.
+## Search canonical Reference Memory through the Router-owned agent API adapter.
 task ops:ref:search -- project_id=operator query="hierarchical sheet syntax"
 
-# Purge is destructive and the Task wrapper prompts first.
+## Purge is destructive and the Task wrapper prompts first.
 task ops:ref:purge -- product=kicad version=9.0
 ~~~
 

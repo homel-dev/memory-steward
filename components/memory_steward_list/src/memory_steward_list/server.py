@@ -55,33 +55,33 @@ async def transcribe(file: Annotated[UploadFile, File()]):
     """
     t0 = time.time()
     audio_duration = 0.0
-    
+
     # Doc 12: "LIST MUST NOT receive prompts, chat context, or memory payloads."
     # We only process the raw audio blob.
-    
+
     try:
         # We pass the file-like object directly to faster-whisper
         # This avoids reading large files entirely into RAM if possible,
         # though UploadFile implies SpooledTemporaryFile.
         text, audio_duration = TranscriptionService.transcribe(file.file)
-        
+
         duration_ms = int((time.time() - t0) * 1000)
-        
+
         record_transcription(
             duration_ms=duration_ms,
             audio_duration_sec=audio_duration,
             model=WHISPER_MODEL_SIZE,
             status="ok"
         )
-        
+
         return {"text": text}
 
     except Exception as e:  # noqa: BLE001 -- API boundary normalizes backend-specific failures
         duration_ms = int((time.time() - t0) * 1000)
         error_msg = str(e)
-        
+
         log.error(f"Transcription failed: {error_msg}")
-        
+
         record_transcription(
             duration_ms=duration_ms,
             audio_duration_sec=0.0, # Unknown if failed early
@@ -89,7 +89,7 @@ async def transcribe(file: Annotated[UploadFile, File()]):
             status="error",
             error=error_msg
         )
-        
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Transcription failed: {error_msg}"

@@ -16,6 +16,7 @@ import types
 import uuid
 from unittest.mock import MagicMock, patch
 
+
 # Stub heavy imports
 def _stub(name, **attrs):
     mod = types.ModuleType(name)
