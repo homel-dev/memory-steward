@@ -267,31 +267,79 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
 
     @mcp.tool(name="ref_list")
     def list_reference_namespaces() -> str:
-        """[Reference] List all ingested reference memory namespaces
-        (product + version combinations) with chunk counts and ingestion dates."""
-        try:
-            with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
-                cur.execute("""
-                    SELECT product, version, scope, source_url,
-                           chunk_count, upserted_count, ingested_at
-                    FROM reference_ingestion
-                    ORDER BY ingested_at DESC
-                """)
-                rows = cur.fetchall()
-        except Exception as e:
-            return f"DB error: {e}"
+        """[Reference] List reference namespaces currently stored in Qdrant.
 
-        if not rows:
-            return "No reference memory ingested yet."
+        ``reference_ingestion`` is immutable provenance history; it is not the
+        current-state inventory and therefore is intentionally not queried here.
+        """
+        namespaces: dict[tuple[str, str], dict] = {}
+        offset = None
+
+        try:
+            while True:
+                points, next_offset = qdrant.scroll(
+                    collection_name=QDRANT_COLLECTION,
+                    scroll_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="memory_type",
+                                match=MatchValue(value="reference_memory"),
+                            )
+                        ]
+                    ),
+                    limit=512,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                for point in points:
+                    payload = point.payload or {}
+                    product = payload.get("product")
+                    version = payload.get("version")
+                    if not product or not version:
+                        continue
+
+                    key = (str(product), str(version))
+                    entry = namespaces.setdefault(
+                        key,
+                        {"chunks": 0, "scopes": set(), "sources": set()},
+                    )
+                    entry["chunks"] += 1
+
+                    scope = payload.get("scope")
+                    if scope:
+                        entry["scopes"].add(str(scope))
+
+                    source = payload.get("source")
+                    if source:
+                        entry["sources"].add(str(source))
+
+                if next_offset is None:
+                    break
+                offset = next_offset
+        except Exception as e:
+            return f"Qdrant error: {e}"
+
+        if not namespaces:
+            return "No reference memory stored."
 
         lines = ["## Reference Memory Namespaces"]
-        for product, version, scope, source, chunks, upserted, ingested_at in rows:
+        for (product, version), entry in sorted(namespaces.items()):
+            scopes = ",".join(sorted(entry["scopes"])) or "?"
+            sources = sorted(entry["sources"])
+            if not sources:
+                source = "?"
+            elif len(sources) == 1:
+                source = sources[0]
+            else:
+                source = f"{len(sources)} sources"
+
             lines.append(
-                f"- **{product}@{version}** ({scope})  "
-                f"chunks={chunks}  upserted={upserted}  "
-                f"ingested={ingested_at.strftime('%Y-%m-%d %H:%M')}  "
-                f"source={source}"
+                f"- **{product}@{version}**  scopes={scopes}  "
+                f"chunks={entry['chunks']}  source={source}"
             )
+
         return "\n".join(lines)
 
     @mcp.tool(name="ref_inspect")
@@ -351,7 +399,8 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
                     FieldCondition(key="memory_type", match=MatchValue(value="reference_memory")),
                     FieldCondition(key="product", match=MatchValue(value=product)),
                     FieldCondition(key="version", match=MatchValue(value=version)),
-                ])
+                ]),
+                wait=True,
             )
             log.warning(f"Operator action: PURGE_REFERENCE product={product} version={version}")
             return f"✅ Purged all reference chunks for `{product}@{version}`."
