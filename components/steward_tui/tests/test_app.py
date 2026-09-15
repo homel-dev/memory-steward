@@ -5,6 +5,7 @@ renders its form, and Invoke marshals typed args and shows the result.
 """
 import pytest
 from textual.widgets import ListView
+
 from steward_tui import mcp_client as mc
 from steward_tui.app import StewardTUI
 
