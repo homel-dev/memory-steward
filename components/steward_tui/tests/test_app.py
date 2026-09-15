@@ -9,7 +9,6 @@ from steward_tui import mcp_client as mc
 from steward_tui.app import StewardTUI
 from textual.widgets import ListView
 
-
 FAKE = [
     mc.ToolSpec(
         name="ref_ingest_url",
