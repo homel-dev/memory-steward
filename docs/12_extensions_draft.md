@@ -104,8 +104,8 @@
 
 ## 0. Status, Scope, and Authority
 
-**Status:** PARTIAL  
-**Audience:** Maintainers, Memory Steward developers, RR developers, extension developers, agent-runtime integrators  
+**Status:** PARTIAL
+**Audience:** Maintainers, Memory Steward developers, RR developers, extension developers, agent-runtime integrators
 **Change policy:** Living implementation-aligned document; no silent behavioral drift.
 
 This document contains both current runtime behavior and proposed architecture.
