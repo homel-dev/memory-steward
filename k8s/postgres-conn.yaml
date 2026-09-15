@@ -9,4 +9,3 @@ stringData:
   POSTGRES_PASSWORD: "homel"
   POSTGRES_DB: "homel"
   POSTGRES_DSN: "postgresql://homel:homel@postgres:5432/homel?sslmode=disable&application_name=memory-router"
-

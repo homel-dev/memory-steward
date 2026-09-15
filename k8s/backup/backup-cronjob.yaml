@@ -26,13 +26,13 @@ spec:
               imagePullPolicy: IfNotPresent
               command: ["bash", "/opt/tooling/backup.sh"]
               env:
-                - {name: PGHOST,            value: "postgres"}
-                - {name: PGUSER,            value: "homel"}
-                - {name: PGPASSWORD,        value: "homel"}
-                - {name: PGDATABASE,        value: "homel"}
-                - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                - {name: PGHOST, value: "postgres"}
+                - {name: PGUSER, value: "homel"}
+                - {name: PGPASSWORD, value: "homel"}
+                - {name: PGDATABASE, value: "homel"}
+                - {name: QDRANT_URL, value: "http://qdrant:6333"}
                 - {name: QDRANT_COLLECTION, value: "homel_memory"}
-                - {name: RETAIN,            value: "14"}
+                - {name: RETAIN, value: "14"}
               volumeMounts:
                 - {name: backups, mountPath: /backups}
           volumes:
