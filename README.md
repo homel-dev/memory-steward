@@ -135,3 +135,93 @@ The repository CI runs component tests and Ruff checks. Before merging changes, 
 ## License
 
 Apache-2.0. See [`LICENSE-2.0.txt`](LICENSE-2.0.txt).
+
+## Detailed Runtime Reference
+
+### API inventory
+
+| Component | Method | Path | Purpose | Mutation |
+| --- | --- | --- | --- | --- |
+| memory-router | GET | /healthz | Liveness/availability check | No memory mutation |
+| memory-router | GET | /v1/models | Expose effective Builder model | Reads runtime Builder model selection |
+| memory-router | POST | /v1/chat/completions | OpenAI-compatible chat ingress | Retrieves context, calls Builder, dispatches ordinary-chat admission asynchronously |
+| memory-router | POST | /v1/context/retrieve | Structured context retrieval for agents | No Builder call; returns governed context plus accounting |
+| memory-router | POST | /v1/reference/search | Canonical Reference Memory search | Exact optional metadata filters; project context from request headers |
+| memory-router | GET | /v1/reference/{chunk_id} | Fetch one reference chunk | 404 when absent |
+| memory-steward | GET | /healthz | Steward liveness | No mutation |
+| memory-steward | POST | /admit | Ordinary-chat durable-memory admission | LLM extraction followed by Postgres/Qdrant persistence |
+| memory-steward | POST | /v1/agent/outcomes | Structured agent outcome submission | Idempotency, deterministic artifact persistence, optional durable-knowledge extraction |
+| memory-steward | POST | /v1/context/feedback | Context usefulness feedback | Stores used/irrelevant/missing-context feedback and telemetry |
+| memory-steward-list | GET | /healthz | LIST liveness | No database dependency |
+| memory-steward-list | POST | /v1/audio/transcriptions | OpenAI-style transcription alias | Local Whisper transcription |
+| memory-steward-list | POST | /v1/list/transcribe | Canonical LIST transcription route | Local Whisper transcription |
+| memory-steward-list | POST | /v1/list/translate | Reserved translation route | Currently returns HTTP 501 |
+| embeddings | GET | /healthz | Embedding service liveness | Reports model readiness |
+| embeddings | POST | /embed | Dense embedding generation | Used by Router and Steward |
+
+### Memory and evidence lanes
+
+| Lane | Primary source | Selection | Primary authority |
+| --- | --- | --- | --- |
+| static_global | Human/operator | Always-active static rows | Human/operator |
+| static_mode_conditioned | Human/operator | Exact supplied mode | Human/operator |
+| dynamic_memory | Steward extraction | Project-scoped semantic retrieval | Steward |
+| reference_memory | Explicit source ingestion | Semantic + exact metadata filters | External/operator source |
+| agent_reference | Structured agent artifacts | Explicit artifact selectors | Deterministic agent output/provenance |
+| telemetry | Runtime writers | Diagnostics only | System evidence, not prompt memory |
+
+### MCP and TUI
+
+The MCP server is the shared internal control surface. The repository also includes `components/steward_tui`, a Textual client that discovers the live tool schema and renders forms dynamically. Use loopback port-forward rather than exposing MCP publicly for routine administration.
+
+~~~bash
+task ops:mcp:forward
+## separate terminal / environment with steward-tui installed
+STEWARD_MCP_URL=http://127.0.0.1:8081/mcp steward-tui
+~~~
+
+### Important current limits
+
+- No automatic mode classifier or active hysteresis engine.
+- `FORCE_MODE` and `HYSTERESIS_WINDOW` are compatibility/diagnostic values without current policy consumers.
+- Ordinary chat admission is asynchronous best-effort, not a durable queue.
+- Migration 060 provisions audited-admission tables, but the deterministic gate/Auditor/quarantine runtime is not implemented.
+- Agent artifacts are not automatically promoted to canonical Reference Memory.
+- MCP static cache is process-local and is not the Router retrieval cache.
+
+### Core operational tasks
+
+| Task | Operational purpose |
+| --- | --- |
+| up | Deploy namespace/resources and wait for core services |
+| down | Delete namespace ms |
+| status:all | Show workload/resource state |
+| nuke | Destructive cleanup path |
+| build | Build local development images inside Minikube; does not rewrite GHCR manifests |
+| k8s:deploy | Apply Kubernetes manifests |
+| k8s:wait | Wait for configured workloads |
+| k8s:restart | Restart application workloads |
+| db:init | Initialize Postgres schema |
+| db:init-qdrant | Initialize Qdrant collection |
+| db:reset | Reset state with destructive confirmation |
+| db:shell | Open Postgres shell |
+| migrate:up | Apply canonical SQL migrations |
+| migrate:status | Inspect migration status |
+| backup | Create state backup |
+| restore | Restore backup with safeguards |
+| export:memory | Export memory data |
+| export:fetch | Fetch exported data |
+| verify:health | Run in-cluster health verification |
+| verify:amp | Run Agent Memory Protocol checks |
+| logs:router | Tail Router logs |
+| logs:steward | Tail Steward logs |
+| ops:service:status | Show complete service status |
+| ops:service:wait | Wait for full service set |
+| ops:service:health | Call health endpoints from an in-cluster context |
+| ops:app:stop | Scale/stop application workloads |
+| ops:app:start | Start application workloads |
+| ops:service:restart | Restart application services |
+| ops:service:restart:router | Restart Router |
+| ops:service:restart:steward | Restart Steward |
+
+For the complete operational reference, see [`DEPLOYMENT.md`](DEPLOYMENT.md), [`docs/07_glass_pane.md`](docs/07_glass_pane.md), and [`docs/09_runtime_contract.md`](docs/09_runtime_contract.md).

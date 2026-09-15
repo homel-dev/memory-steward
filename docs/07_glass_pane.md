@@ -222,6 +222,171 @@ For multiline/raw text ingestion, use `ops:mcp:call`/FastMCP argument encoding d
 
 ---
 
+## 7. Complete Tool Contract
+
+| Plane | Tool | Class | Purpose |
+| --- | --- | --- | --- |
+| content | ref_ingest_url | Mutating | Fetch and ingest a reference URL into canonical Reference Memory |
+| content | ref_ingest_text | Mutating | Ingest operator-provided reference text |
+| content | ref_list | Read-only | List reference ingestion namespaces/events |
+| content | ref_inspect | Read-only | Inspect stored reference chunks by metadata |
+| content | ref_purge | Destructive | Delete reference data for an explicit selection |
+| content | static_list | Read-only | List static memory rows |
+| content | static_create | Mutating | Create static memory |
+| content | static_update | Mutating | Update a static-memory row |
+| content | static_toggle | Mutating | Enable or disable static memory |
+| content | static_delete | Destructive | Delete a static-memory row |
+| content | cache_control | Process-local | Control the MCP process-local static-memory cache only |
+| stability | config_set_budget | Mutating | Persist MAX_CONTEXT_TOKENS consumed by Router |
+| stability | config_force_mode | Compatibility | Persist FORCE_MODE; current Router/Steward do not consume it |
+| stability | config_set_hysteresis | Compatibility | Persist HYSTERESIS_WINDOW; no current hysteresis engine consumes it |
+| stability | config_show | Read-only | Show runtime_config values and current-consumer annotations |
+| diagnostics | diag_health | Read-only | Aggregate service health information |
+| diagnostics | diag_explain | Read-only | Inspect telemetry for a request |
+| diagnostics | diag_explain_last | Read-only | Inspect most recent request telemetry |
+| diagnostics | diag_metrics | Read-only | Summarize operational telemetry |
+| diagnostics | diag_qdrant_stats | Read-only | Inspect Qdrant collection statistics |
+| diagnostics | dyn_inspect | Read-only | Inspect dynamic-memory rows |
+| diagnostics | dyn_simulate_retrieval | Read-only | Simulate dynamic retrieval for troubleshooting |
+| diagnostics | diag_logs | Read-only | Read shared collected logs |
+| git | repo_add | Mutating | Register repository metadata/connection |
+| git | repo_list | Read-only | List registered repositories |
+| git | repo_remove | Mutating | Remove repository registration |
+| git | repo_test | Read-only/network | Test repository access |
+| git | git_list_repos | Read-only | List Git repositories available through the Git plane |
+| git | git_ingest_repo | Mutating | Ingest repository content into reference memory |
+| git | git_ingest_file | Mutating | Ingest one repository file into reference memory |
+| git | git_write_file | Mutating external | Write a repository file when explicitly invoked and authorized |
+| agent | memory.retrieve_context | Read-only | Adapter to Router /v1/context/retrieve |
+| agent | memory.reference.search | Read-only | Adapter to Router reference search |
+| agent | memory.reference.get | Read-only | Adapter to Router reference get |
+| agent | memory.submit_agent_outcome | Mutating | Adapter to Steward structured outcome admission |
+| agent | memory.submit_context_feedback | Mutating | Adapter to Steward context feedback |
+
+The tool list above is a current implementation inventory. Clients SHOULD still call MCP `list_tools` because FastMCP schemas define the exact runtime arguments and may evolve with code.
+
+## 8. Terminal Glass Pane TUI
+
+The repository contains `components/steward_tui`, a Textual MCP client. It is not a second management API. It discovers the server's tool list and JSON Schema live, groups tools by plane, renders fields dynamically, and invokes the selected tool through FastMCP.
+
+### 8.1 TUI behavior
+
+~~~text
+StewardTUI starts
+  -> resolve STEWARD_MCP_URL or default http://127.0.0.1:8081/mcp
+  -> FastMCP Client.list_tools()
+  -> convert each tool inputSchema to scalar form fields
+  -> group/sort by inferred plane
+  -> operator selects tool
+  -> render required/optional fields
+  -> coerce scalar input types
+  -> Client.call_tool(..., raise_on_error=False)
+  -> render structured content and text blocks in result log
+~~~
+
+Supported dynamic scalar form types are string, integer, number, and boolean. Complex schemas fall back conservatively rather than inventing client-side policy.
+
+Keyboard bindings include `q` to quit and `r` to refresh the live tool inventory.
+
+### 8.2 Connectivity
+
+The default TUI URL is loopback MCP:
+
+~~~text
+http://127.0.0.1:8081/mcp
+~~~
+
+Use the repository port-forward Task before launching a local TUI/client:
+
+~~~bash
+task ops:mcp:forward
+~~~
+
+or set `STEWARD_MCP_URL` explicitly.
+
+## 9. `/glap` ChatOps Bridge
+
+Router recognizes user input beginning with `/glap` and delegates command interpretation to its MCP bridge. This is an optional conversational operator surface, not the MCP protocol itself. The bridge discovers live MCP tools/schemas instead of maintaining a divergent hard-coded tool contract.
+
+Streaming chat requests are supported by wrapping the `/glap` result in the Router's SSE-compatible response path.
+
+## 10. Client Choice Matrix
+
+| Client | Best use | Schema source | Exposure |
+| --- | --- | --- | --- |
+| Task wrappers | Repeatable shell/operator procedures | FastMCP command invocation | In-cluster or loopback |
+| FastMCP CLI | Ad hoc exact tool calls and schema inspection | Live MCP server | In-cluster or loopback |
+| Steward TUI | Interactive full-screen operations | Live MCP server | Local client via loopback by default |
+| Open WebUI /glap | Conversational ChatOps | Router MCP bridge + live schemas | Through existing Router/Open WebUI path |
+| Agent MCP adapters | Programmatic context/outcome workflows | Live MCP server | Cluster/internal integration |
+
+## 11. Tool-Safety Classification
+
+Read-only tools may still expose sensitive operational information. Mutating tools must be treated as explicit operator actions. Destructive tools such as `ref_purge` and static deletion should never be invoked implicitly because a model merely discussed deletion.
+
+The Git plane contains `git_write_file`. Its presence means the MCP server can expose an external mutation capability when configured/authorized. Operator policy MUST decide whether that capability is enabled/usable in a given deployment. Documentation and clients must not disguise it as a read-only ingestion tool.
+
+## 12. MCP Resource Contract
+
+The explicit resource `diagnostics://contract` exposes selected diagnostics/runtime values. Historical conceptual resources such as `mem://...` or `ref://...` are not current resources; memory/reference inspection is tool-driven in this implementation.
+
+## 13. Authentication and Network Posture
+
+Current repository guidance keeps MCP internal/ClusterIP and uses loopback port-forward for local clients. A public ingress for routine operator access is not part of the supported topology.
+
+Authentication/authorization hardening is a deployment concern that must be explicit before exposing MCP beyond trusted cluster/local boundaries. Tool-level mutation authority, credentials, and Git write capability require particular care.
+
+## 14. Reference Workflow Example
+
+~~~bash
+## Discover exact live tool schema.
+task ops:mcp:tools:json
+
+## Inspect available corpora.
+task ops:ref:list
+
+## Ingest authoritative source material.
+task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
+
+## Inspect/filter stored reference content.
+task ops:ref:inspect -- product=kicad version=9.0 limit=10
+
+## Search through the Router-owned reference API adapter.
+task ops:ref:search -- project_id=operator query="hierarchical sheet syntax"
+
+## Destructive operation: wrapper prompts.
+task ops:ref:purge -- product=kicad version=9.0
+~~~
+
+## 15. Troubleshooting Workflow
+
+When an MCP client fails:
+
+1. check `task ops:service:status`;
+2. check `task ops:diag:health`;
+3. verify the port-forward if the client is local;
+4. refresh/list tools to rule out stale schema assumptions;
+5. inspect MCP logs;
+6. inspect Router/Steward dependencies for adapter tools;
+7. distinguish protocol/connectivity errors from tool-returned application errors.
+
+The TUI deliberately returns tool errors as rendered results instead of crashing the UI whenever FastMCP returns an error result.
+
+## 16. MCP Change Checklist
+
+A new/changed tool requires:
+
+- exact name and plane classification;
+- input-schema validation;
+- mutation/safety classification;
+- component test coverage;
+- Task/TUI implications;
+- documentation inventory update here;
+- operator example only if it improves a supported workflow;
+- explicit backend authority (MCP-local, Router, Steward, Postgres/Qdrant, or external Git).
+
+---
+
 ## 7. Closing Statement
 
 The MCP server is the single schema-driven operator/agent control surface. Terminal, Open WebUI, and future TUI clients SHOULD consume the same live MCP schemas rather than create parallel command contracts.
@@ -231,3 +396,47 @@ The MCP server is the single schema-driven operator/agent control surface. Termi
 ---
 
 **END OF DOCUMENT 07**
+
+
+## Appendix A. Tool-by-Tool Review Checklist
+
+For every tool below, reviewers should verify that its live schema, backend authority, mutation class, error behavior, and documentation remain aligned.
+
+| Plane | Tool | Class | Purpose |
+| --- | --- | --- | --- |
+| content | ref_ingest_url | Mutating | Fetch and ingest a reference URL into canonical Reference Memory |
+| content | ref_ingest_text | Mutating | Ingest operator-provided reference text |
+| content | ref_list | Read-only | List reference ingestion namespaces/events |
+| content | ref_inspect | Read-only | Inspect stored reference chunks by metadata |
+| content | ref_purge | Destructive | Delete reference data for an explicit selection |
+| content | static_list | Read-only | List static memory rows |
+| content | static_create | Mutating | Create static memory |
+| content | static_update | Mutating | Update a static-memory row |
+| content | static_toggle | Mutating | Enable or disable static memory |
+| content | static_delete | Destructive | Delete a static-memory row |
+| content | cache_control | Process-local | Control the MCP process-local static-memory cache only |
+| stability | config_set_budget | Mutating | Persist MAX_CONTEXT_TOKENS consumed by Router |
+| stability | config_force_mode | Compatibility | Persist FORCE_MODE; current Router/Steward do not consume it |
+| stability | config_set_hysteresis | Compatibility | Persist HYSTERESIS_WINDOW; no current hysteresis engine consumes it |
+| stability | config_show | Read-only | Show runtime_config values and current-consumer annotations |
+| diagnostics | diag_health | Read-only | Aggregate service health information |
+| diagnostics | diag_explain | Read-only | Inspect telemetry for a request |
+| diagnostics | diag_explain_last | Read-only | Inspect most recent request telemetry |
+| diagnostics | diag_metrics | Read-only | Summarize operational telemetry |
+| diagnostics | diag_qdrant_stats | Read-only | Inspect Qdrant collection statistics |
+| diagnostics | dyn_inspect | Read-only | Inspect dynamic-memory rows |
+| diagnostics | dyn_simulate_retrieval | Read-only | Simulate dynamic retrieval for troubleshooting |
+| diagnostics | diag_logs | Read-only | Read shared collected logs |
+| git | repo_add | Mutating | Register repository metadata/connection |
+| git | repo_list | Read-only | List registered repositories |
+| git | repo_remove | Mutating | Remove repository registration |
+| git | repo_test | Read-only/network | Test repository access |
+| git | git_list_repos | Read-only | List Git repositories available through the Git plane |
+| git | git_ingest_repo | Mutating | Ingest repository content into reference memory |
+| git | git_ingest_file | Mutating | Ingest one repository file into reference memory |
+| git | git_write_file | Mutating external | Write a repository file when explicitly invoked and authorized |
+| agent | memory.retrieve_context | Read-only | Adapter to Router /v1/context/retrieve |
+| agent | memory.reference.search | Read-only | Adapter to Router reference search |
+| agent | memory.reference.get | Read-only | Adapter to Router reference get |
+| agent | memory.submit_agent_outcome | Mutating | Adapter to Steward structured outcome admission |
+| agent | memory.submit_context_feedback | Mutating | Adapter to Steward context feedback |

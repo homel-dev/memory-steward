@@ -69,6 +69,68 @@ Best-effort side paths (telemetry, async admission) should not replace a success
 
 ---
 
+## 6. Principle: Authority Must Be Observable
+
+A component boundary is useful only if operators can tell which component made a decision. Request IDs, context request IDs, outcome IDs, explicit tools, and distinct storage tables make authority inspectable.
+
+The system should avoid "smart" hidden behavior that cannot be distinguished from data or configuration. A future classifier or auditor therefore requires explicit telemetry and documented failure behavior.
+
+## 7. Principle: Deterministic Evidence Is Not Learned Memory
+
+An agent-generated JSON artifact can be useful precisely because its bytes/schema/provenance are stable. Re-embedding or summarizing it into learned memory may destroy properties required for engineering workflows. The separate `agent_reference` lane preserves that distinction.
+
+## 8. Principle: Reference Sources Are Not Beliefs
+
+External documentation should remain identifiable as source material. Reference ingestion, metadata filters, and the `memory_type=reference_memory` discriminator allow the Router to retrieve sources without pretending the system "learned" them as user facts.
+
+## 9. Principle: Bounded Context Beats Implicit Growth
+
+Every lane competes for finite model input. The Router therefore uses explicit context and history budgets. Increasing model context size does not remove the need for ordering, gating, and observability; it only changes the available ceiling.
+
+## 10. Principle: Async Work Must Admit Its Durability Tradeoff
+
+Async ordinary-chat admission protects latency, but without a durable queue it is best-effort. The design should state that tradeoff plainly rather than claiming eventual consistency that the runtime cannot guarantee.
+
+## 11. Principle: Operator Mutations Are Explicit
+
+MCP provides powerful mutation tools. Their existence is not permission for automatic invocation. Destructive or externally mutating operations should require explicit operator intent and deployment authorization.
+
+## 12. Principle: Provisioned Schema Is Not Runtime Behavior
+
+Migrations can safely prepare future tables ahead of implementation. Documentation must still distinguish "the table exists" from "the runtime executes this state machine." This is the central rule behind the PARTIAL/PROPOSAL status of audited admission control.
+
+## 13. Anti-Patterns
+
+| Anti-pattern | Why it is rejected |
+| --- | --- |
+| One giant prompt containing all memory | Weak precedence, token growth, hard-to-debug behavior |
+| Model decides what becomes Reference Memory | Conflates learned belief with authority/source material |
+| Router directly writes learned facts | Collapses read/assemble and admission authority |
+| Steward answers users | Collapses governance and data-plane inference |
+| Hidden product inference from mode | Mixes posture with corpus selection |
+| Arbitrary reference metadata filters | Expands query surface without versioned contract |
+| Treating MCP-local cache as Router cache | Creates false performance/consistency assumptions |
+| Silent retries/queues claimed but absent | Misstates durability guarantees |
+| Telemetry payloads used as context | Pollutes cognitive inputs with diagnostics |
+| Documentation shortened until operational detail is lost | Makes code archaeology necessary for normal maintenance |
+
+## 14. Design Review Questions
+
+Before accepting a new feature, reviewers should be able to answer:
+
+- What lane does the data belong to?
+- Who writes it?
+- Who reads it?
+- How is it selected?
+- How is it budgeted?
+- How is it deleted or invalidated?
+- What telemetry proves the behavior?
+- What happens when its dependency fails?
+- Does it block the hot path?
+- Is the behavior current, partial, proposal, or background?
+
+---
+
 ## 6. Closing Statement
 
 These principles summarize behavior already visible in the implementation. They guide changes but do not override executable contracts in code, tests, manifests, or API schemas.

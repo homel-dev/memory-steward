@@ -70,3 +70,52 @@ memory-steward-list:
 - Do not present proposal-only mode/auditor behavior as implemented.
 - Do not promote agent artifacts to canonical Reference Memory implicitly.
 - Do not let documentation outrun code/tests.
+
+## Request Sequences
+
+### Chat
+
+~~~text
+client -> Router -> static/dynamic/reference retrieval -> context budget -> Builder -> client
+                 \-> telemetry
+                 \-> async Steward admission -> Postgres + Qdrant
+~~~
+
+### Agent
+
+~~~text
+agent -> Router /v1/context/retrieve -> structured lanes + accounting
+agent -> Steward /v1/agent/outcomes -> idempotency + agent_reference + optional durable knowledge
+agent -> Steward /v1/context/feedback -> feedback + telemetry
+~~~
+
+## Memory Matrix
+
+| Lane | Write authority | Read path | Notes |
+| --- | --- | --- | --- |
+| Static | Operator/MCP | Router | Global or exact-mode |
+| Dynamic | Steward | Router | Project-scoped semantic |
+| Reference | Explicit ingestion | Router | Source lane; exact metadata filters |
+| Agent artifact | Steward deterministic outcome path | Router structured context | Exact selectors |
+| Telemetry | Runtime | Diagnostics | Never cognitive memory by default |
+
+## Critical Limits
+
+- No mode classifier/hysteresis runtime.
+- No durable admission queue.
+- No active audited admission state machine.
+- MCP stays internal/loopback for routine use.
+- `task build` does not rewrite GHCR deployment images.
+
+## High-Value Operator Commands
+
+~~~bash
+task ops:service:status
+task ops:service:health
+task ops:mcp:tools:json
+task ops:diag:health
+task ops:ref:list
+task ops:config:show
+task logs:router
+task logs:steward
+~~~

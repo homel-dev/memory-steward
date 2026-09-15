@@ -202,6 +202,108 @@ Use C4 concepts for system/container/component boundaries even when standard Mer
 
 ---
 
+## 10. Completeness Standard
+
+A documentation update is not complete merely because every file exists. The repository documentation set MUST preserve enough detail for an engineer who has not read the implementation to understand the runtime boundaries, data movement, operational entry points, failure behavior, and verification path.
+
+For each behavior-changing subsystem, documentation SHOULD cover all of the following dimensions when they apply:
+
+1. purpose and authority;
+2. inputs and outputs;
+3. persistence and mutation behavior;
+4. runtime configuration;
+5. request or event sequence;
+6. failure handling and fallbacks;
+7. observability and diagnostics;
+8. operator workflow;
+9. executable verification;
+10. explicit non-implemented or proposal-only behavior.
+
+Short summaries MAY appear in the root README and cheat sheet, but the numbered engineering documents MUST retain the detailed contract. A rewrite MUST NOT collapse a detailed specification into a marketing summary when the removed material is still relevant to operating, extending, or reviewing the system.
+
+## 11. Code-to-Documentation Authority Map
+
+| Implementation area | Primary documentation | Required synchronization |
+| --- | --- | --- |
+| Router APIs, schemas, retrieval, prompt assembly | 01, 02, 03, 04, 09 | Update endpoint contracts, retrieval semantics, mode semantics, budgets, and topology |
+| Steward admission and AMP outcomes | 01, 11, 12, 13 | Update write authority, artifact behavior, idempotency, and admission boundaries |
+| MCP tools and resources | 07 | Update complete tool inventory, safety classification, clients, and examples |
+| Kubernetes manifests and Taskfiles | 09, DEPLOYMENT.md | Update service names, ports, env/config, images, lifecycle, and health procedures |
+| SQL migrations and telemetry writers | 06, 13 | Update schema inventory and distinguish provisioned schema from active runtime |
+| LIST extension | 12 | Update routes, runtime dependencies, and isolation constraints |
+| Textual operator TUI | 07, 12, component README | Update discovery, form generation, invocation, and local MCP connectivity |
+| CI workflows and tests | 08, CONTRIBUTING.md | Update exact checks and definition of done |
+
+## 12. Current Repository Documentation Set
+
+The maintained documentation surface consists of the root guides, numbered specifications, architecture background material, and component READMEs. The files have different purposes and SHOULD NOT duplicate each other verbatim.
+
+| File family | Audience | Expected depth |
+| --- | --- | --- |
+| README.md | New users and maintainers | Architecture summary, supported workflows, limits, documentation map |
+| ARCHITECTURE_CHEAT_SHEET.md | Operators/reviewers | Compact but precise runtime reference |
+| CONTRIBUTING.md | Contributors | Engineering workflow, boundaries, tests, documentation duties |
+| DEPLOYMENT.md | Operators | Runnable lifecycle and troubleshooting procedures |
+| RFC_PROPOSAL.md | Architects | Architectural rationale with current/proposal distinction |
+| docs/00-13 | Implementers/operators | Detailed normative or explicitly scoped background/proposal contracts |
+| docs/WHITEPAPER.md | Architects/stakeholders | Background narrative anchored to current implementation |
+| components/*/README.md | Component maintainers | Local responsibilities, APIs, dependencies, tests, operational notes |
+
+## 13. Normative Status Rules
+
+Use one of these status meanings consistently:
+
+- **IMPLEMENTED**: code/manifests exist in the current tree and the document describes that behavior.
+- **PARTIAL**: a bounded subset exists; the document MUST name both the implemented and missing pieces.
+- **PROPOSAL**: design intent only. It MUST NOT be described as an existing runtime guarantee.
+- **BACKGROUND**: explanatory or comparative material, not a runtime contract.
+- **DEPRECATED**: retained for migration/history and not recommended for new use.
+
+A database table created by a migration is **provisioned schema**, not proof that a control loop is implemented. A configuration key that can be written is **not active configuration** unless a current consumer reads it. A documented command is **not supported** unless its referenced Task, route, or tool exists in the current tree.
+
+## 14. Example Documentation Review Procedure
+
+Before merging a documentation-sensitive change, a reviewer SHOULD perform this sequence:
+
+1. identify the source files and manifests changed by the implementation;
+2. map them to the authority map above;
+3. inspect every affected public API, environment variable, Task, SQL table, MCP tool, and operator step;
+4. search documentation for the old name/behavior and update every current-state reference;
+5. mark design-only sections explicitly rather than silently deleting useful rationale;
+6. verify local Markdown links;
+7. verify one H1 per Markdown file;
+8. verify no trailing whitespace and a final newline;
+9. run the organization repository policy and YAML/Shell checks when applicable;
+10. compare the resulting documentation depth against the pre-change contract so detail is not accidentally discarded.
+
+## 15. Diagram Rules in Detail
+
+Mermaid diagrams SHOULD encode authority and direction, not decorative complexity. A diagram SHOULD state which component performs a write when the distinction matters. Data stores SHOULD be named by role rather than merely by product. Proposed components MUST be visually or textually identified as proposed.
+
+Recommended diagram forms:
+
+- flowchart for component/topology boundaries;
+- sequence diagram for request/admission/agent workflows;
+- state diagram only when an actual state machine exists;
+- table instead of a diagram when exact field/flag behavior is more important than topology.
+
+Do not create a state-machine diagram for mode hysteresis: the current runtime has no mode-classifier/hysteresis engine.
+
+## 16. Examples and Command Safety
+
+Examples MUST be copyable or clearly marked pseudocode. Destructive commands MUST be identified as destructive. Secrets MUST use placeholders and MUST NOT be embedded in committed examples. Host-side commands MUST NOT be presented as required when the repository provides an in-cluster Task wrapper for the same operation.
+
+For MCP examples, discover the live schema before assuming arguments:
+
+~~~bash
+task ops:mcp:tools:json
+task ops:mcp:call -- ref_list
+~~~
+
+For deployment examples, use the checked-in namespace `ms` and the checked-in Task names.
+
+---
+
 ## 10. Closing Statement
 
 The repository is trustworthy only when operators can distinguish implemented behavior from design intent and can navigate from code/manifests to documentation without encountering contradictory contracts.

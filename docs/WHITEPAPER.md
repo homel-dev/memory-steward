@@ -125,6 +125,67 @@ Determinism here means explicit authority, schemas, filters, budgets, idempotenc
 
 ---
 
+## 8. Architectural Detail
+
+Memory Steward separates three questions that monolithic chat-memory implementations often combine:
+
+1. **What context should inference receive now?** — Router responsibility.
+2. **What information should become durable learned memory?** — Steward responsibility.
+3. **What information is an authoritative source or deterministic artifact rather than learned belief?** — Reference and agent-artifact lanes.
+
+This separation is the central architectural claim of the project.
+
+## 9. Context Virtualization
+
+The Router constructs a bounded virtual context from several independently governed sources rather than treating the full conversation transcript as the memory system. Static rules, dynamic facts, reference sources, deterministic artifacts, and recent dialogue have different selection semantics and authority.
+
+The result is not "infinite memory." It is an explicit policy for spending a finite context budget.
+
+## 10. Durable Learning
+
+Ordinary chat learning is asynchronous. This preserves response latency but means the current implementation is best-effort without a durable admission queue. Structured agent outcomes add stronger identity and deterministic artifact persistence, allowing engineering workflows to preserve exact outputs before optional knowledge extraction.
+
+## 11. Source Grounding
+
+Reference Memory remains source material. Product/version/scope/provider/source metadata allow exact narrowing while semantic embeddings find relevant chunks inside the selected corpus. This is materially different from treating retrieved documentation as a user preference or learned fact.
+
+## 12. Operator Glass Pane
+
+The MCP service provides a schema-driven glass pane over content, configuration, diagnostics, Git/repository operations, and agent-memory adapters. Because clients discover schemas live, the terminal TUI and command-line workflows can share the same protocol rather than implementing independent management APIs.
+
+## 13. Current Limits
+
+The architecture intentionally documents several limits:
+
+- no automatic mode classifier;
+- no active hysteresis engine despite compatibility configuration keys;
+- no durable async admission queue;
+- no active deterministic gate/Auditor pipeline despite provisioned schema;
+- no automatic promotion of agent artifacts to Reference Memory;
+- MCP URL ingestion requires normal server-side egress/SSRF hardening for hostile environments;
+- process-local caches do not imply distributed cache coherence.
+
+These limits are part of an accurate whitepaper because they define where the control plane ends today.
+
+## 14. Engineering Value
+
+For engineering agents, the system provides value when reproducibility and source authority matter more than conversational illusion. An agent can retrieve exact documentation version filters, consume deterministic artifacts, submit an idempotent outcome, report context quality, and leave telemetry that an operator can inspect.
+
+The design does not remove probabilistic inference. It contains probabilistic inference inside explicit data/control boundaries.
+
+## 15. Evolution Direction
+
+Future work should preserve the same discipline:
+
+- introduce new memory lanes only with explicit authority/mutability contracts;
+- make admission decisions replayable where possible;
+- add durable queues only with stated delivery semantics;
+- make mode inference a real versioned component if it is needed;
+- expose observability through stable schemas/tools rather than hidden logs;
+- keep documentation detailed enough that operators do not need code archaeology for normal incidents.
+
+---
+
 ## 8. Closing Statement
 
 Memory Steward is defined by explicit runtime boundaries: governed retrieval, separate durable-memory admission, schema-driven MCP control, and diagnostics that do not masquerade as learned memory. Architectural claims in this note remain subordinate to the implementation.

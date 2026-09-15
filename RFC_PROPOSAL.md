@@ -50,3 +50,23 @@ Separation reduces accidental authority coupling but is not itself a complete se
 ## 8. Compatibility Rule
 
 Claims in this RFC become implementation guarantees only when they are represented by the repository's code, tests, manifests, and current operational documentation.
+
+## 9. Current Implementation Mapping
+
+The separated control-plane proposal maps to current runtime as follows:
+
+- Router owns retrieval, prompt/context assembly, and Builder dispatch.
+- Steward owns durable dynamic-memory admission and structured agent outcomes.
+- MCP exposes explicit operator and agent adapters.
+- Postgres stores canonical structured state and telemetry.
+- Qdrant stores semantic dynamic/reference vectors.
+- Agent artifacts use a deterministic Postgres lane.
+- Reference ingestion is explicit and source-oriented.
+
+## 10. Deliberately Unimplemented Portions
+
+The repository does not currently implement automatic mode classification, mode hysteresis, a durable admission queue, or the proposed deterministic audited admission state machine. These remain future design areas and are intentionally not smuggled into the current contract.
+
+## 11. Acceptance Criteria for Architectural Evolution
+
+A future RFC implementation should preserve explicit authority, bounded context, observable decisions, replay/idempotency where needed, and detailed current-state documentation. New intelligence in the control plane should be introduced as a named component or state transition, not hidden inside prompt text.
