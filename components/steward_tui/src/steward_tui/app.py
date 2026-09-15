@@ -28,8 +28,6 @@ from textual.widgets import (
 from steward_tui import mcp_client as mc
 from steward_tui.config import mcp_url
 
-
-
 # K9s-style dark palette, intentionally excluding magenta/pink/purple.
 K9S_DARK = Theme(
     name="k9s-dark",
