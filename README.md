@@ -68,7 +68,7 @@ task tui
 
 FastMCP discovers tool schemas from the live server, so this CLI path does not duplicate the MCP contract. Open WebUI and `/glap` remain available as an optional conversational operator surface.
 
-`task tui` launches the packaged `steward-tui` image in Docker and creates a loopback-only `kubectl port-forward` to `memory-steward-mcp`. The host does not need Python, FastMCP, or Textual installed; the TUI runtime stays containerized.
+`task tui` launches the packaged `steward-tui` image as an ephemeral pod in namespace `ms` and connects directly to the internal `memory-steward-mcp` Service. The host does not run Docker, Python, FastMCP, or Textual for this path, and no port-forward is involved.
 
 ## Operational mode: current behavior
 
@@ -179,10 +179,10 @@ Apache-2.0. See [`LICENSE-2.0.txt`](LICENSE-2.0.txt).
 The MCP server is the shared internal control surface. The repository also includes `components/steward_tui`, a Textual client that discovers the live tool schema and renders forms dynamically. Use loopback port-forward rather than exposing MCP publicly for routine administration.
 
 ~~~bash
-task ops:mcp:forward
-## separate terminal / environment with steward-tui installed
-STEWARD_MCP_URL=http://127.0.0.1:8081/mcp steward-tui
+task tui
 ~~~
+
+`task ops:mcp:forward` remains available only for separately installed local MCP clients that intentionally need loopback access.
 
 ### Important current limits
 
@@ -201,6 +201,7 @@ STEWARD_MCP_URL=http://127.0.0.1:8081/mcp steward-tui
 | down | Delete namespace ms |
 | status:all | Show workload/resource state |
 | nuke | Destructive cleanup path |
+| tui | Run the Glass Pane TUI in an ephemeral in-cluster pod |
 | build | Build local development images inside Minikube; does not rewrite GHCR manifests |
 | k8s:deploy | Apply Kubernetes manifests |
 | k8s:wait | Wait for configured workloads |

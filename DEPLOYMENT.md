@@ -13,7 +13,6 @@
 - `kubectl`
 - `minikube`
 - `go-task` / `task` when using Taskfile operations
-- `docker` when using `task tui`
 
 ### 2. Bootstrap
 
@@ -73,7 +72,7 @@ For the full-screen schema-driven operator client:
 task tui
 ~~~
 
-The task runs `steward-tui` in Docker and creates a loopback-only `kubectl port-forward` to the internal MCP Service. No host Python/FastMCP/Textual environment is required.
+The task runs `steward-tui` as an ephemeral pod in namespace `ms` and connects directly to the internal `memory-steward-mcp` Service. No host Docker, Python, FastMCP, Textual, or port-forward is used.
 
 For a local MCP-capable application:
 
@@ -101,6 +100,7 @@ Current manifests include both fixed and floating tags. Do not assume every work
 | down | Delete namespace ms |
 | status:all | Show workload/resource state |
 | nuke | Destructive cleanup path |
+| tui | Run the Glass Pane TUI in an ephemeral in-cluster pod |
 | build | Build local development images inside Minikube; does not rewrite GHCR manifests |
 | k8s:deploy | Apply Kubernetes manifests |
 | k8s:wait | Wait for configured workloads |

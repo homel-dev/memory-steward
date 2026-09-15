@@ -51,37 +51,19 @@ tasks:
       - kubectl get svc -n {{.NAMESPACE}}
 
   tui:
-    desc: "Open the Glass Pane TUI in a container through a loopback MCP port-forward"
+    desc: "Open the Glass Pane TUI in an ephemeral in-cluster pod"
     interactive: true
     cmds:
-      - |
-        set -eu
-        PF_LOG="$(mktemp)"
-        kubectl port-forward -n {{.NAMESPACE}} svc/memory-steward-mcp 18081:8081 >"$PF_LOG" 2>&1 &
-        PF_PID=$!
-        cleanup() {
-          kill "$PF_PID" >/dev/null 2>&1 || true
-          wait "$PF_PID" >/dev/null 2>&1 || true
-          rm -f "$PF_LOG"
-        }
-        trap cleanup EXIT INT TERM
-        i=0
-        until grep -q "Forwarding from 127.0.0.1:18081" "$PF_LOG"; do
-          if ! kill -0 "$PF_PID" >/dev/null 2>&1; then
-            cat "$PF_LOG" >&2
-            exit 1
-          fi
-          i=$((i + 1))
-          if [ "$i" -ge 50 ]; then
-            cat "$PF_LOG" >&2
-            echo "timed out waiting for MCP port-forward" >&2
-            exit 1
-          fi
-          sleep 0.1
-        done
-        docker run --rm -it --pull=always --network=host \
-          -e STEWARD_MCP_URL=http://127.0.0.1:18081/mcp/ \
-          {{.TUI_IMAGE}}
+      - kubectl delete pod steward-tui -n {{.NAMESPACE}} --ignore-not-found --wait=true
+      - >-
+        kubectl run steward-tui
+        -n {{.NAMESPACE}}
+        --rm -it
+        --restart=Never
+        --labels=app=steward-tui
+        --image={{.TUI_IMAGE}}
+        --image-pull-policy=Always
+        --env=STEWARD_MCP_URL=http://memory-steward-mcp:8081/mcp/
 
   nuke:
     desc: "🔥 DESTRUCTIVE: Delete this namespace and its Persistent Volumes"
