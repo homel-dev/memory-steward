@@ -4,10 +4,9 @@ network is touched — we only verify wiring: tools populate, selecting a tool
 renders its form, and Invoke marshals typed args and shows the result.
 """
 import pytest
-
+from textual.widgets import ListView
 from steward_tui import mcp_client as mc
 from steward_tui.app import StewardTUI
-from textual.widgets import ListView
 
 FAKE = [
     mc.ToolSpec(
