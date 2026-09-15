@@ -7,11 +7,11 @@ and keeps keyboard focus explicit so a selected tool can be filled immediately.
 from __future__ import annotations
 
 import json
-import os
 
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.theme import Theme
 from textual.widgets import (
     Button,
     Footer,
@@ -29,29 +29,112 @@ from steward_tui import mcp_client as mc
 from steward_tui.config import mcp_url
 
 
+
+# K9s-style dark palette, intentionally excluding magenta/pink/purple.
+K9S_DARK = Theme(
+    name="k9s-dark",
+    primary="#00A8CC",
+    secondary="#4EA1D3",
+    accent="#5FD7FF",
+    foreground="#D7E3EA",
+    background="#0B0F14",
+    surface="#111820",
+    panel="#18242E",
+    success="#5FD75F",
+    warning="#FFD75F",
+    error="#FF5F5F",
+    dark=True,
+    variables={
+        "border": "#355061",
+        "border-blurred": "#233542",
+        "block-cursor-foreground": "#071015",
+        "block-cursor-background": "#5FD7FF",
+        "block-cursor-text-style": "bold",
+        "block-cursor-blurred-foreground": "#D7E3EA",
+        "block-cursor-blurred-background": "#1C2A35",
+        "block-cursor-blurred-text-style": "none",
+        "block-hover-background": "#16232D",
+        "input-cursor-background": "#5FD7FF",
+        "input-cursor-foreground": "#071015",
+        "input-selection-background": "#2F80A060",
+        "scrollbar": "#355061",
+        "scrollbar-hover": "#4EA1D3",
+        "scrollbar-active": "#5FD7FF",
+        "scrollbar-background": "#0B0F14",
+        "scrollbar-corner-color": "#0B0F14",
+        "footer-foreground": "#AFC1CC",
+        "footer-background": "#111820",
+        "footer-key-foreground": "#5FD7FF",
+        "footer-key-background": "transparent",
+        "footer-description-foreground": "#8FA3B2",
+        "footer-description-background": "transparent",
+        "button-foreground": "#071015",
+        "button-color-foreground": "#071015",
+    },
+)
+
+
 class StewardTUI(App):
     CSS = """
     Screen {
-        background: $background;
-        color: $text;
+        background: #0B0F14;
+        color: #D7E3EA;
+    }
+
+    Header {
+        background: #0B0F14;
+        color: #5FD7FF;
+    }
+
+    Footer {
+        background: #111820;
+        color: #AFC1CC;
     }
 
     #workspace {
         height: 1fr;
+        background: #0B0F14;
     }
 
     #tools {
         width: 34;
         min-width: 26;
-        border-right: solid $border;
+        background: #0B0F14;
+        color: #D7E3EA;
+        border-right: solid #355061;
         padding-right: 1;
     }
 
+    #tools > ListItem {
+        background: #0B0F14;
+        color: #D7E3EA;
+        padding: 0 1;
+    }
+
+    #tools > ListItem:disabled {
+        background: #0B0F14;
+        color: #5FD7FF;
+        text-style: bold;
+    }
+
+    #tools > ListItem.-highlight {
+        background: #1C2A35;
+        color: #D7E3EA;
+    }
+
     #tools:focus {
-        border-right: heavy $accent;
+        border-right: heavy #5FD7FF;
+        background-tint: transparent;
+    }
+
+    #tools:focus > ListItem.-highlight {
+        background: #5FD7FF;
+        color: #071015;
+        text-style: bold;
     }
 
     #detail {
+        background: #0B0F14;
         padding: 0 1;
     }
 
@@ -59,34 +142,37 @@ class StewardTUI(App):
         height: 2;
         padding: 0 1;
         text-style: bold;
-        color: $text-primary;
-        background: $panel;
+        color: #5FD7FF;
+        background: #111820;
     }
 
     #meta {
         height: 1;
         padding: 0 1;
-        color: $text-muted;
+        color: #8FA3B2;
+        background: #0B0F14;
     }
 
     #desc {
         height: auto;
         max-height: 7;
         padding: 0 1;
-        color: $text-muted;
+        color: #AFC1CC;
+        background: #0B0F14;
         overflow-y: auto;
     }
 
     #form {
         height: 1fr;
         min-height: 12;
-        border: round $border;
+        background: #0B0F14;
+        border: round #355061;
         padding: 1 2;
         margin: 1 0;
     }
 
     #form:focus-within {
-        border: round $accent;
+        border: round #5FD7FF;
     }
 
     .field {
@@ -94,65 +180,79 @@ class StewardTUI(App):
         width: 1fr;
         margin: 0 0 1 0;
         padding: 0 1 1 1;
-        border-bottom: solid $panel;
+        background: #0B0F14;
+        border-bottom: solid #18242E;
     }
 
     .field-label {
         height: 1;
+        color: #D7E3EA;
         text-style: bold;
     }
 
     .field-help {
         height: auto;
-        color: $text-muted;
+        color: #8FA3B2;
     }
 
     Input {
         width: 1fr;
         height: 3;
-        border: tall $border-blurred;
-        background: $surface;
-        color: $text;
+        border: tall #233542;
+        background: #111820;
+        color: #D7E3EA;
     }
 
     Input:focus {
-        border: tall $accent;
-        background: $panel;
+        border: tall #5FD7FF;
+        background: #18242E;
+        color: #FFFFFF;
     }
 
     Input.input-error {
-        border: tall $error;
+        border: tall #FF5F5F;
     }
 
     Switch:focus {
-        border: tall $accent;
+        border: tall #5FD7FF;
     }
 
     #invoke {
         width: 1fr;
         height: 3;
         margin: 0 0 1 0;
+        background: #00A8CC;
+        color: #071015;
+        text-style: bold;
+    }
+
+    #invoke:hover {
+        background: #4EA1D3;
+        color: #071015;
     }
 
     #invoke:focus {
-        border: heavy $accent;
+        background: #5FD7FF;
+        color: #071015;
+        border: heavy #D7E3EA;
         text-style: bold;
     }
 
     #result {
         height: 10;
         min-height: 6;
-        border: round $border;
+        background: #0B0F14;
+        color: #D7E3EA;
+        border: round #355061;
         padding: 0 1;
     }
     """
 
     BINDINGS = [
-        ("q", "quit", "Quit"),
-        ("r", "refresh", "Refresh tools"),
+        ("ctrl+q", "quit", "Quit"),
+        ("ctrl+r", "refresh", "Refresh tools"),
         ("escape", "tools", "Tools"),
         ("ctrl+enter", "invoke", "Invoke"),
-        ("f2", "themes", "Theme"),
     ]
 
     def __init__(self) -> None:
@@ -175,8 +275,8 @@ class StewardTUI(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        requested_theme = os.getenv("STEWARD_TUI_THEME", "nord")
-        self.theme = requested_theme if requested_theme in self.available_themes else "nord"
+        self.register_theme(K9S_DARK)
+        self.theme = "k9s-dark"
         self.title = "Memory Steward — Glass Pane TUI"
         self.sub_title = mcp_url()
         self.query_one("#tools", ListView).focus()
@@ -214,9 +314,6 @@ class StewardTUI(App):
     def action_invoke(self) -> None:
         if self.current:
             self.do_invoke()
-
-    def action_themes(self) -> None:
-        self.search_themes()
 
     # ---- selection + dynamic form ------------------------------------------
     @on(ListView.Selected, "#tools")
