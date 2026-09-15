@@ -19,6 +19,7 @@ import uuid
 
 import psycopg
 import requests
+from bs4 import BeautifulSoup, NavigableString
 from fastmcp import FastMCP
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue, PointStruct
@@ -61,58 +62,181 @@ def _chunk_id(product: str, version: str, content: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, _ref_key(product, version, content)))
 
 
+_DOCUMENT_HEADING_RE = re.compile(
+    r"^(?P<marks>#{2,4}|={2,4})\s+(?P<title>.+?)\s*$"
+)
+
+
+def _append_chunk(
+    chunks: list[dict],
+    *,
+    title: str,
+    body: str,
+    max_chars: int,
+) -> None:
+    """Append one semantic section, splitting only oversized sections."""
+    body = body.strip()
+    if not body:
+        return
+
+    if len(body) <= max_chars:
+        chunks.append({"section": title, "content": body})
+        return
+
+    words = body.split()
+    window, overlap = 250, 50
+    i = 0
+    part = 1
+    while i < len(words):
+        chunk_text = " ".join(words[i:i + window])
+        chunks.append({"section": f"{title} (part {part})", "content": chunk_text})
+        if i + window >= len(words):
+            break
+        i += window - overlap
+        part += 1
+
+
 def _chunk_markdown(text: str, max_chars: int = 1500) -> list[dict]:
-    """
-    Split markdown into semantic chunks by H2 section.
-    Each chunk carries its section title for metadata.
-    Falls back to sliding window if a section exceeds max_chars.
-    """
-    # Split on H2 headers
-    sections = re.split(r'\n(?=## )', text.strip())
-    chunks = []
+    """Split Markdown or AsciiDoc into heading-aware semantic chunks.
 
-    for section in sections:
-        if not section.strip():
+    Markdown H2-H4 and AsciiDoc level-2 through level-4 headings are section
+    boundaries. Child headings retain their parent path in ``doc_section``.
+    """
+    chunks: list[dict] = []
+    heading_stack: dict[int, str] = {}
+    section_title = "General"
+    section_lines: list[str] = []
+
+    def flush() -> None:
+        _append_chunk(
+            chunks,
+            title=section_title,
+            body="\n".join(section_lines),
+            max_chars=max_chars,
+        )
+
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        match = _DOCUMENT_HEADING_RE.match(line)
+        if not match:
+            section_lines.append(line)
             continue
 
-        # Extract section title
-        lines = section.strip().splitlines()
-        title = lines[0].lstrip('#').strip() if lines else "General"
-        body = "\n".join(lines[1:]).strip() if len(lines) > 1 else section.strip()
+        flush()
+        section_lines = []
 
-        if not body:
-            body = section.strip()
+        level = len(match.group("marks"))
+        heading_stack[level] = match.group("title").strip()
+        for deeper_level in [depth for depth in heading_stack if depth > level]:
+            del heading_stack[deeper_level]
 
-        # If section fits, emit as one chunk
-        if len(body) <= max_chars:
-            chunks.append({"section": title, "content": body})
-            continue
+        section_title = " > ".join(
+            heading_stack[depth]
+            for depth in sorted(heading_stack)
+            if depth <= level
+        )
 
-        # Otherwise slide through it in overlapping windows
-        words = body.split()
-        window, overlap = 250, 50
-        i = 0
-        part = 0
-        while i < len(words):
-            chunk_text = " ".join(words[i: i + window])
-            chunks.append({"section": f"{title} (part {part + 1})", "content": chunk_text})
-            i += window - overlap
-            part += 1
-
+    flush()
     return chunks
 
 
+def _extract_html_document(raw_html: str) -> str:
+    """Extract semantic documentation text from server-rendered HTML."""
+    soup = BeautifulSoup(raw_html, "html.parser")
+
+    for tag in soup.find_all(
+        ["script", "style", "noscript", "svg", "template", "form", "button", "iframe"]
+    ):
+        tag.decompose()
+
+    root = None
+    for selector in ("#content", "article", "main", '[role="main"]'):
+        root = soup.select_one(selector)
+        if root is not None:
+            break
+    if root is None:
+        root = soup.body or soup
+
+    for selector in ("#toc", ".toc", ".toc2", '[role="navigation"]'):
+        for tag in root.select(selector):
+            tag.decompose()
+
+    for tag in root.find_all(["nav", "header", "footer", "aside"]):
+        tag.decompose()
+
+    for tag in root.find_all(["h1", "h2", "h3", "h4"]):
+        heading = tag.get_text(" ", strip=True)
+        if not heading:
+            tag.decompose()
+            continue
+        level = int(tag.name[1])
+        tag.replace_with(NavigableString(f"\n{'#' * level} {heading}\n"))
+
+    for tag in root.find_all("pre"):
+        code = tag.get_text("\n", strip=False).strip()
+        replacement = f"\n```\n{code}\n```\n" if code else "\n"
+        tag.replace_with(NavigableString(replacement))
+
+    for row in root.find_all("tr"):
+        cells = [
+            cell.get_text(" ", strip=True)
+            for cell in row.find_all(["th", "td"], recursive=False)
+        ]
+        row.replace_with(
+            NavigableString("\n" + " | ".join(cells) + "\n" if cells else "\n")
+        )
+
+    for tag in root.find_all("li"):
+        item = tag.get_text(" ", strip=True)
+        tag.replace_with(NavigableString(f"\n- {item}\n" if item else "\n"))
+
+    for tag in root.find_all("p"):
+        paragraph = tag.get_text(" ", strip=True)
+        tag.replace_with(
+            NavigableString(f"\n{paragraph}\n" if paragraph else "\n")
+        )
+
+    for tag in root.find_all("br"):
+        tag.replace_with(NavigableString("\n"))
+
+    normalized: list[str] = []
+    previous_blank = False
+    for raw_line in root.get_text("\n").splitlines():
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
+        line = re.sub(r"\s+([,.;:!?])", r"\1", line)
+        if not line:
+            if normalized and not previous_blank:
+                normalized.append("")
+            previous_blank = True
+            continue
+        normalized.append(line)
+        previous_blank = False
+
+    return "\n".join(normalized).strip()
+
+
 def _fetch_url(url: str) -> str:
-    """Fetch raw text from a URL. Strips HTML tags for non-markdown sources."""
-    r = requests.get(url, timeout=30, headers={"User-Agent": "memory-steward-mcp/1.0"})
+    """Fetch a reference URL and normalize HTML documentation for chunking."""
+    r = requests.get(
+        url,
+        timeout=30,
+        headers={"User-Agent": "memory-steward-mcp/1.0"},
+    )
     r.raise_for_status()
-    content_type = r.headers.get("content-type", "")
+
     text = r.text
-    if "html" in content_type:
-        # Very basic HTML strip — good enough for docs pages
-        text = re.sub(r'<[^>]+>', ' ', text)
-        text = re.sub(r'[ \t]+', ' ', text)
-        text = re.sub(r'\n{3,}', '\n\n', text)
+    media_type = r.headers.get("content-type", "").partition(";")[0].lower()
+    looks_like_html = bool(
+        re.search(
+            r"<(?:!doctype\s+html|html|body|main|article|h[1-4])\b",
+            text[:4096],
+            re.I,
+        )
+    )
+
+    if media_type in {"text/html", "application/xhtml+xml"} or looks_like_html:
+        text = _extract_html_document(text)
+
     return text
 
 
