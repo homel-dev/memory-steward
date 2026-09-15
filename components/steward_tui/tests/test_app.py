@@ -1,10 +1,7 @@
 # components/steward_tui/tests/test_app.py
-"""Headless UI test via Textual's Pilot. The MCP layer is monkeypatched so no
-network is touched — we only verify wiring: tools populate, selecting a tool
-renders its form, and Invoke marshals typed args and shows the result.
-"""
+"""Headless UI tests for keyboard focus, dynamic forms, and invocation."""
 import pytest
-from textual.widgets import ListView
+from textual.widgets import Input, ListView
 
 from steward_tui import mcp_client as mc
 from steward_tui.app import StewardTUI
@@ -16,7 +13,8 @@ FAKE = [
         fields=[
             mc.ToolField("url", "string", required=True, description="source url"),
             mc.ToolField("product", "string", required=True),
-            mc.ToolField("version", "string", required=False, default="latest"),
+            mc.ToolField("version", "string", required=True),
+            mc.ToolField("scope", "string", required=False, default="general"),
         ],
     ),
     mc.ToolSpec(name="ref_list", description="List reference products.", fields=[]),
@@ -24,8 +22,62 @@ FAKE = [
 ]
 
 
+async def _select_ref_ingest(app: StewardTUI, pilot) -> None:
+    lv = app.query_one("#tools", ListView)
+    lv.focus()
+    lv.index = 1
+    await pilot.pause()
+    await pilot.press("enter")
+    await pilot.pause()
+
+
 @pytest.mark.asyncio
-async def test_app_lists_tools_and_invokes(monkeypatch):
+async def test_select_focuses_first_required_field_and_tab_moves(monkeypatch):
+    async def fake_fetch(url=None):
+        return FAKE
+
+    monkeypatch.setattr(mc, "fetch_tools", fake_fetch)
+
+    app = StewardTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _select_ref_ingest(app, pilot)
+
+        assert app.current is not None and app.current.name == "ref_ingest_url"
+        assert list(app.inputs) == ["url", "product", "version", "scope"]
+        assert app.screen.focused is app.inputs["url"]
+
+        await pilot.press("tab")
+        assert app.screen.focused is app.inputs["product"]
+        await pilot.press("tab")
+        assert app.screen.focused is app.inputs["version"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_required_field_gets_focus_and_error_class(monkeypatch):
+    async def fake_fetch(url=None):
+        return FAKE
+
+    monkeypatch.setattr(mc, "fetch_tools", fake_fetch)
+
+    app = StewardTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _select_ref_ingest(app, pilot)
+
+        app.inputs["url"].value = "https://example.com/doc"
+        app.inputs["product"].value = "acme"
+        await pilot.press("ctrl+enter")
+        await pilot.pause()
+
+        version = app.inputs["version"]
+        assert isinstance(version, Input)
+        assert app.screen.focused is version
+        assert version.has_class("input-error")
+
+
+@pytest.mark.asyncio
+async def test_app_invokes_with_all_required_fields(monkeypatch):
     captured = {}
 
     async def fake_fetch(url=None):
@@ -42,30 +94,32 @@ async def test_app_lists_tools_and_invokes(monkeypatch):
     app = StewardTUI()
     async with app.run_test() as pilot:
         await pilot.pause()
-        # tools loaded: 3 real tools + 2 plane headers (ref, static)
-        assert len(app.specs) == 3
+        await _select_ref_ingest(app, pilot)
 
-        # select the first real tool (ref_ingest_url); index 0 is the "ref" header.
-        # Drive it like a user: focus the list, move the cursor, press enter.
-        lv = app.query_one("#tools", ListView)
-        lv.focus()
-        lv.index = 1
-        await pilot.pause()
-        await pilot.press("enter")
-        await pilot.pause()
-        assert app.current is not None and app.current.name == "ref_ingest_url"
-
-        # fill the two required fields
         app.inputs["url"].value = "https://example.com/doc"
         app.inputs["product"].value = "acme"
-        await pilot.pause()
-
-        app.query_one("#invoke").press()
+        app.inputs["version"].value = "9.0"
+        await pilot.press("ctrl+enter")
         await pilot.pause()
 
         assert captured["name"] == "ref_ingest_url"
-        # optional empty 'version' omitted; required fields present
         assert captured["arguments"] == {
             "url": "https://example.com/doc",
             "product": "acme",
+            "version": "9.0",
         }
+
+
+@pytest.mark.asyncio
+async def test_escape_returns_focus_to_tool_list(monkeypatch):
+    async def fake_fetch(url=None):
+        return FAKE
+
+    monkeypatch.setattr(mc, "fetch_tools", fake_fetch)
+
+    app = StewardTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await _select_ref_ingest(app, pilot)
+        await pilot.press("escape")
+        assert app.screen.focused is app.query_one("#tools", ListView)
