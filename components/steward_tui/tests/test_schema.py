@@ -35,8 +35,7 @@ def test_fields_anyof_optional_union_picks_scalar():
     }
     by = {f.name: f for f in fields_from_schema(schema)}
     assert by["limit"].type == "integer"
-    # object union has no scalar -> falls back to free-text string
-    assert by["filters"].type == "string"
+    assert by["filters"].type == "object"
 
 
 def test_fields_empty_and_non_object():
@@ -55,6 +54,20 @@ def test_coerce_types():
     assert coerce(b, "true") is True
     assert coerce(b, "0") is False
     assert coerce(s, "hello") == "hello"
+
+
+def test_coerce_json_object_and_array():
+    obj = ToolField("reference_filters", "object", required=False)
+    arr = ToolField("items", "array", required=False)
+    assert coerce(obj, '{"product":"kicad","version":"9.0"}') == {
+        "product": "kicad",
+        "version": "9.0",
+    }
+    assert coerce(arr, '["a","b"]') == ["a", "b"]
+    with pytest.raises(ValueError, match="JSON object"):
+        coerce(obj, '["not-an-object"]')
+    with pytest.raises(ValueError, match="valid JSON"):
+        coerce(obj, "{")
 
 
 def test_coerce_optional_empty_is_none_required_raises():

@@ -18,12 +18,13 @@ from steward_tui.config import mcp_url
 
 # JSON-Schema scalar type -> the input widget kind we render for it.
 _SCALARS = {"string", "integer", "number", "boolean"}
+_SUPPORTED_TYPES = _SCALARS | {"object", "array"}
 
 
 @dataclass
 class ToolField:
     name: str
-    type: str  # one of _SCALARS
+    type: str  # one of _SUPPORTED_TYPES
     required: bool
     default: Any = None
     description: str = ""
@@ -51,9 +52,8 @@ def fields_from_schema(schema: dict | None) -> list[ToolField]:
     """PURE: turn a JSON-Schema object into an ordered list of ToolField.
 
     Tolerates the ``anyOf`` unions FastMCP emits for Optional params
-    (e.g. ``dict[str, str] | None``) by picking the first concrete scalar.
-    Non-scalar shapes (objects/arrays) fall back to a free-text ``string``
-    field so the operator can hand-type JSON if needed.
+    (e.g. ``dict[str, str] | None``) by picking the first supported concrete
+    type. Object and array inputs are entered as JSON text and decoded later.
     """
     if not schema or schema.get("type") != "object":
         return []
@@ -64,12 +64,12 @@ def fields_from_schema(schema: dict | None) -> list[ToolField]:
         if not isinstance(pschema, dict):
             continue
         jtype = pschema.get("type")
-        if jtype not in _SCALARS:
+        if jtype not in _SUPPORTED_TYPES:
             for alt in pschema.get("anyOf", []) or []:
-                if isinstance(alt, dict) and alt.get("type") in _SCALARS:
+                if isinstance(alt, dict) and alt.get("type") in _SUPPORTED_TYPES:
                     jtype = alt["type"]
                     break
-        ftype = jtype if jtype in _SCALARS else "string"
+        ftype = jtype if jtype in _SUPPORTED_TYPES else "string"
         out.append(
             ToolField(
                 name=pname,
@@ -100,6 +100,16 @@ def coerce(fld: ToolField, raw: str) -> Any:
         return float(raw)
     if fld.type == "boolean":
         return raw.lower() in ("1", "true", "yes", "y", "on")
+    if fld.type in {"object", "array"}:
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{fld.name} must be valid JSON: {exc.msg}") from exc
+        if fld.type == "object" and not isinstance(value, dict):
+            raise ValueError(f"{fld.name} must be a JSON object")
+        if fld.type == "array" and not isinstance(value, list):
+            raise ValueError(f"{fld.name} must be a JSON array")
+        return value
     return raw
 
 
@@ -132,11 +142,14 @@ async def fetch_tools(url: str | None = None) -> list[ToolSpec]:
     specs: list[ToolSpec] = []
     async with Client(url) as client:
         for t in await client.list_tools():
+            schema = getattr(t, "input_schema", None)
+            if schema is None:
+                schema = getattr(t, "inputSchema", None)
             specs.append(
                 ToolSpec(
                     name=t.name,
                     description=(t.description or "").strip(),
-                    fields=fields_from_schema(getattr(t, "inputSchema", None)),
+                    fields=fields_from_schema(schema),
                 )
             )
     specs.sort(key=lambda s: (s.plane, s.name))

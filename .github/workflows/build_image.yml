@@ -37,6 +37,9 @@ jobs:
           - component: memory-steward-mcp
             context: ./components/memory_steward_mcp
             dockerfile: ./components/memory_steward_mcp/Dockerfile
+          - component: steward-tui
+            context: ./components/steward_tui
+            dockerfile: ./components/steward_tui/Dockerfile
           - component: memory-steward-list
             context: ./components/memory_steward_list
             dockerfile: ./components/memory_steward_list/Dockerfile

@@ -13,6 +13,7 @@
 - `kubectl`
 - `minikube`
 - `go-task` / `task` when using Taskfile operations
+- `docker` when using `task tui`
 
 ### 2. Bootstrap
 
@@ -65,6 +66,14 @@ Do not add a public MCP ingress for routine operator work.
 task ops:mcp:tools
 task ops:mcp:call -- ref_list
 ~~~
+
+For the full-screen schema-driven operator client:
+
+~~~bash
+task tui
+~~~
+
+The task runs `steward-tui` in Docker and creates a loopback-only `kubectl port-forward` to the internal MCP Service. No host Python/FastMCP/Textual environment is required.
 
 For a local MCP-capable application:
 

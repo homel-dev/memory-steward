@@ -20,6 +20,7 @@ vars:
   # Runtime ops currently use GHCR through this value.
   # `task build` creates local homel/*:dev images; it does not rewrite manifests or this variable.
   TOOLING_IMAGE: ghcr.io/homel-dev/memory-steward/tooling:latest
+  TUI_IMAGE: ghcr.io/homel-dev/memory-steward/steward-tui:latest
 
 tasks:
   default:
@@ -48,6 +49,39 @@ tasks:
     cmds:
       - kubectl get pods -n {{.NAMESPACE}}
       - kubectl get svc -n {{.NAMESPACE}}
+
+  tui:
+    desc: "Open the Glass Pane TUI in a container through a loopback MCP port-forward"
+    interactive: true
+    cmds:
+      - |
+        set -eu
+        PF_LOG="$(mktemp)"
+        kubectl port-forward -n {{.NAMESPACE}} svc/memory-steward-mcp 18081:8081 >"$PF_LOG" 2>&1 &
+        PF_PID=$!
+        cleanup() {
+          kill "$PF_PID" >/dev/null 2>&1 || true
+          wait "$PF_PID" >/dev/null 2>&1 || true
+          rm -f "$PF_LOG"
+        }
+        trap cleanup EXIT INT TERM
+        i=0
+        until grep -q "Forwarding from 127.0.0.1:18081" "$PF_LOG"; do
+          if ! kill -0 "$PF_PID" >/dev/null 2>&1; then
+            cat "$PF_LOG" >&2
+            exit 1
+          fi
+          i=$((i + 1))
+          if [ "$i" -ge 50 ]; then
+            cat "$PF_LOG" >&2
+            echo "timed out waiting for MCP port-forward" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
+        docker run --rm -it --pull=always --network=host \
+          -e STEWARD_MCP_URL=http://127.0.0.1:18081/mcp/ \
+          {{.TUI_IMAGE}}
 
   nuke:
     desc: "🔥 DESTRUCTIVE: Delete this namespace and its Persistent Volumes"

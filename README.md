@@ -13,6 +13,7 @@ Memory Steward is a self-hosted memory control plane for LLM and agent workloads
 | `memory-router` | OpenAI-compatible chat ingress, project resolution, static/dynamic/reference retrieval, MMR, token budgeting, prompt-envelope rendering, Builder dispatch, async chat admission |
 | `memory-steward` | Durable-memory admission from chat turns and structured agent outcomes; canonical `agent_reference` persistence; context feedback |
 | `memory-steward-mcp` | Internal operator/agent control surface implemented with FastMCP |
+| `steward-tui` | Textual Glass Pane client that discovers and invokes live MCP tool schemas |
 | `memory-steward-list` | Optional local speech transcription service; translation endpoint is present but currently returns HTTP 501 |
 | `embeddings` | Dense embedding service used by Router and Steward |
 | Postgres | Canonical structured state, runtime configuration, telemetry, ingestion records, agent artifacts |
@@ -62,9 +63,12 @@ task ops:mcp:call -- ref_list
 task ops:ref:inspect -- product=kicad version=9.0 limit=10
 task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
 task ops:mcp:forward
+task tui
 ~~~
 
 FastMCP discovers tool schemas from the live server, so this CLI path does not duplicate the MCP contract. Open WebUI and `/glap` remain available as an optional conversational operator surface.
+
+`task tui` launches the packaged `steward-tui` image in Docker and creates a loopback-only `kubectl port-forward` to `memory-steward-mcp`. The host does not need Python, FastMCP, or Textual installed; the TUI runtime stays containerized.
 
 ## Operational mode: current behavior
 

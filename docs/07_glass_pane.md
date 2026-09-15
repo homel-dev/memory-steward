@@ -39,6 +39,7 @@ This document describes the tools registered by the current `memory-steward-mcp`
 ~~~mermaid
 graph LR
     Operator[Operator terminal / MCP client]
+    TUI[steward-tui]
     WebUI[Open WebUI /glap]
     Agent[Agent runtime]
     MCP[memory-steward-mcp]
@@ -48,6 +49,7 @@ graph LR
     Q[(Qdrant)]
 
     Operator -->|kubectl exec or loopback port-forward| MCP
+    TUI -->|loopback port-forward| MCP
     WebUI -->|Router MCP bridge| MCP
     Agent -->|MCP| MCP
     MCP -->|AMP retrieval adapters| Router
@@ -79,14 +81,24 @@ task ops:ref:inspect -- product=kicad version=9.0 limit=10
 
 The Task wrappers invoke FastMCP inside the already-deployed MCP pod, so the workstation does not need a separate Python/FastMCP environment.
 
-### 2.3 Local MCP-capable clients
+### 2.3 Glass Pane TUI
+
+~~~bash
+task tui
+~~~
+
+`task tui` starts the packaged `steward-tui` image in Docker and creates a loopback-only port-forward to `memory-steward-mcp`. The client discovers the live MCP tool list and input schemas, renders a Textual form, and invokes the selected tool. Object and array arguments are entered as JSON.
+
+The host does not need Python, FastMCP, or Textual installed; the TUI runtime stays containerized.
+
+### 2.4 Local MCP-capable clients
 
 ~~~bash
 task ops:mcp:forward
 ## http://127.0.0.1:8081/mcp
 ~~~
 
-The port-forward binds loopback only. FastMCP can also derive a typed CLI from live tool schemas; a future full-screen TUI SHOULD remain a presentation layer over this same MCP contract rather than define another command API.
+The port-forward binds loopback only. FastMCP can also derive a typed CLI from live tool schemas. The implemented `steward-tui` remains a presentation layer over the same live MCP contract and does not define a parallel command API.
 
 [Back to top](#navigation)
 
@@ -389,7 +401,7 @@ A new/changed tool requires:
 
 ## 7. Closing Statement
 
-The MCP server is the single schema-driven operator/agent control surface. Terminal, Open WebUI, and future TUI clients SHOULD consume the same live MCP schemas rather than create parallel command contracts.
+The MCP server is the single schema-driven operator/agent control surface. Terminal, Open WebUI, and `steward-tui` consume the same live MCP schemas rather than create parallel command contracts.
 
 [Back to top](#navigation)
 
