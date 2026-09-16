@@ -30,6 +30,39 @@ from memory_steward.codegraph_state import (
 log = logging.getLogger("memory-steward.codegraph-serve")
 
 
+# Agent-facing read/query surface for CodeGraph v0.20.1. The worker adapter
+# is a second enforcement point behind Memory Steward capability routing.
+AGENT_CODEGRAPH_TOOLS = frozenset(
+    {
+        "codegraph_symbol_search",
+        "codegraph_get_symbol_info",
+        "codegraph_get_detailed_symbol",
+        "codegraph_get_ai_context",
+        "codegraph_get_edit_context",
+        "codegraph_get_curated_context",
+        "codegraph_search_by_pattern",
+        "codegraph_search_by_error",
+        "codegraph_get_callers",
+        "codegraph_get_callees",
+        "codegraph_get_call_graph",
+        "codegraph_get_dependency_graph",
+        "codegraph_analyze_impact",
+        "codegraph_analyze_complexity",
+        "codegraph_traverse_graph",
+        "codegraph_find_circular_deps",
+        "codegraph_find_entry_points",
+        "codegraph_find_hot_paths",
+        "codegraph_find_by_imports",
+        "codegraph_find_by_signature",
+        "codegraph_find_implementors",
+        "codegraph_find_dead_imports",
+        "codegraph_get_module_summary",
+        "codegraph_find_related_tests",
+        "codegraph_pr_context",
+    }
+)
+
+
 @dataclass(frozen=True)
 class ServeWorkerConfig:
     registry_id: str
@@ -360,7 +393,13 @@ def create_adapter_app(client: StdioMcpClient, *, proxy_token: str | None) -> Fa
     @app.get("/v1/tools")
     def tools(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         authorize(authorization)
-        return {"tools": client.list_tools()}
+        return {
+            "tools": [
+                tool
+                for tool in client.list_tools()
+                if tool.get("name") in AGENT_CODEGRAPH_TOOLS
+            ]
+        }
 
     @app.post("/v1/call")
     def call(
@@ -374,6 +413,8 @@ def create_adapter_app(client: StdioMcpClient, *, proxy_token: str | None) -> Fa
             raise HTTPException(status_code=400, detail="tool name is required")
         if not isinstance(arguments, dict):
             raise HTTPException(status_code=400, detail="tool arguments must be an object")
+        if name not in AGENT_CODEGRAPH_TOOLS:
+            raise HTTPException(status_code=403, detail="CodeGraph tool is not agent-authorized")
         return client.call_tool(name, arguments)
 
     return app

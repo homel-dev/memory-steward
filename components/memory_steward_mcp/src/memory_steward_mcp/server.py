@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 from memory_steward_mcp.agent_plane import register_agent_tools
+from memory_steward_mcp.codegraph_plane import register_codegraph_plane
 from memory_steward_mcp.config import EMBEDDINGS_URL, QDRANT_URL
 from memory_steward_mcp.content_plane import _ingest_text_internal, register_content_tools
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
@@ -63,6 +64,7 @@ if qdrant:
 
 register_stability_tools(mcp)
 register_agent_tools(mcp)
+register_codegraph_plane(mcp)
 
 # ==============================================================================
 # 3. ENTRYPOINT

@@ -16,7 +16,7 @@ authors = [
 
 dependencies = [
   "fastapi>=0.110",
-  "fastmcp>=3.0.0rc1",
+  "fastmcp>=3.4.7,<4",
   "uvicorn[standard]>=0.27",
   "pydantic>=2.6",
   "httpx>=0.28",

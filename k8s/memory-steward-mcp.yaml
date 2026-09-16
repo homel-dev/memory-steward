@@ -25,6 +25,9 @@ spec:
           envFrom:
             - configMapRef:
                 name: homel-runtime-contract
+            - secretRef:
+                name: homel-codegraph
+                optional: true
 
           # 2. Diagnostics Plane Access (Postgres & Logs)
           env:

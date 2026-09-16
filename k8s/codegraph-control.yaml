@@ -178,3 +178,26 @@ subjects:
   - kind: ServiceAccount
     name: codegraph-controller
     namespace: ms
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: codegraph-serve-ingress
+  namespace: ms
+spec:
+  podSelector:
+    matchLabels:
+      app: codegraph-serve
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: codegraph-controller
+        - podSelector:
+            matchLabels:
+              app: memory-steward-mcp
+      ports:
+        - protocol: TCP
+          port: 8094
