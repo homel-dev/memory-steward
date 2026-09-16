@@ -8,7 +8,8 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from memory_steward.codegraph_controller import CodeGraphController, create_app as create_controller_app
+from memory_steward.codegraph_controller import CodeGraphController
+from memory_steward.codegraph_controller import create_app as create_controller_app
 from memory_steward.codegraph_listener import _discovery_record, create_app
 from memory_steward.codegraph_registry import (
     DiscoveryResult,
