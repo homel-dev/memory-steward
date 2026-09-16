@@ -12,7 +12,9 @@ Key invariants (Doc 03):
 """
 
 import hashlib
+import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -25,8 +27,23 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue, PointStruct
 
 from memory_steward_mcp.config import EMBEDDINGS_URL, POSTGRES_DSN, QDRANT_COLLECTION
+from memory_steward_mcp.ingest_jobs import (
+    enqueue_url_job,
+    get_job,
+    list_jobs,
+    request_cancel,
+    retry_job,
+)
 
 log = logging.getLogger("memory-steward-mcp.content")
+
+REFERENCE_EMBED_BATCH_SIZE = int(os.environ.get("REFERENCE_EMBED_BATCH_SIZE", "8"))
+REFERENCE_FETCH_MAX_BYTES = int(os.environ.get("REFERENCE_FETCH_MAX_BYTES", str(64 * 1024 * 1024)))
+
+if REFERENCE_EMBED_BATCH_SIZE < 1:
+    raise RuntimeError("REFERENCE_EMBED_BATCH_SIZE must be >= 1")
+if REFERENCE_FETCH_MAX_BYTES < 1:
+    raise RuntimeError("REFERENCE_FETCH_MAX_BYTES must be >= 1")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -216,28 +233,59 @@ def _extract_html_document(raw_html: str) -> str:
 
 
 def _fetch_url(url: str) -> str:
-    """Fetch a reference URL and normalize HTML documentation for chunking."""
+    """Fetch a reference URL with a hard decompressed-size ceiling."""
     r = requests.get(
         url,
-        timeout=30,
+        timeout=(10, 30),
         headers={"User-Agent": "memory-steward-mcp/1.0"},
+        stream=True,
     )
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
 
-    text = r.text
-    media_type = r.headers.get("content-type", "").partition(";")[0].lower()
-    looks_like_html = bool(
-        re.search(
-            r"<(?:!doctype\s+html|html|body|main|article|h[1-4])\b",
-            text[:4096],
-            re.I,
+        content_length = r.headers.get("content-length")
+        if content_length and int(content_length) > REFERENCE_FETCH_MAX_BYTES:
+            raise ValueError(
+                f"reference document is too large: {content_length} bytes; "
+                f"limit is {REFERENCE_FETCH_MAX_BYTES}"
+            )
+
+        raw = bytearray()
+        if hasattr(r, "iter_content"):
+            for block in r.iter_content(chunk_size=64 * 1024):
+                if not block:
+                    continue
+                raw.extend(block)
+                if len(raw) > REFERENCE_FETCH_MAX_BYTES:
+                    raise ValueError(
+                        f"reference document exceeds {REFERENCE_FETCH_MAX_BYTES} bytes"
+                    )
+            encoding = getattr(r, "encoding", None) or "utf-8"
+            text = bytes(raw).decode(encoding, errors="replace")
+        else:
+            text = r.text
+            if len(text.encode("utf-8")) > REFERENCE_FETCH_MAX_BYTES:
+                raise ValueError(
+                    f"reference document exceeds {REFERENCE_FETCH_MAX_BYTES} bytes"
+                )
+
+        media_type = r.headers.get("content-type", "").partition(";")[0].lower()
+        looks_like_html = bool(
+            re.search(
+                r"<(?:!doctype\s+html|html|body|main|article|h[1-4])\b",
+                text[:4096],
+                re.I,
+            )
         )
-    )
 
-    if media_type in {"text/html", "application/xhtml+xml"} or looks_like_html:
-        text = _extract_html_document(text)
+        if media_type in {"text/html", "application/xhtml+xml"} or looks_like_html:
+            text = _extract_html_document(text)
 
-    return text
+        return text
+    finally:
+        close = getattr(r, "close", None)
+        if close is not None:
+            close()
 
 
 def _record_provenance(
@@ -257,6 +305,83 @@ def _record_provenance(
 # Shared ingestion (module scope so MCP tools AND the Git plane can import it)
 # ---------------------------------------------------------------------------
 
+class IngestionCancelled(RuntimeError):
+    """Raised between bounded batches when an ingestion job is cancelled."""
+
+
+def _ingest_reference_content(
+    qdrant: QdrantClient,
+    *,
+    text: str,
+    product: str,
+    version: str,
+    scope: str,
+    source_url: str,
+    progress_fn=None,
+    cancel_fn=None,
+    record_provenance: bool = True,
+) -> dict[str, int]:
+    """Chunk, embed, and upsert reference content in bounded batches."""
+    chunks = _chunk_markdown(text)
+    if not chunks:
+        raise ValueError("No content extracted — check the source text.")
+
+    total = len(chunks)
+    processed = 0
+    upserted = 0
+    if progress_fn is not None:
+        progress_fn(total, processed, upserted)
+
+    for start in range(0, total, REFERENCE_EMBED_BATCH_SIZE):
+        if cancel_fn is not None and cancel_fn():
+            raise IngestionCancelled(
+                f"cancelled after {processed}/{total} chunks"
+            )
+
+        batch = chunks[start : start + REFERENCE_EMBED_BATCH_SIZE]
+        vectors = _embed([chunk["content"] for chunk in batch])
+        if len(vectors) != len(batch):
+            raise RuntimeError(
+                f"embeddings returned {len(vectors)} vectors for {len(batch)} texts"
+            )
+
+        points = []
+        for offset, (chunk, vec) in enumerate(zip(batch, vectors)):
+            chunk_index = start + offset
+            points.append(
+                PointStruct(
+                    id=_chunk_id(product, version, chunk["content"]),
+                    vector={"dense": vec},
+                    payload={
+                        "memory_type": "reference_memory",
+                        "ref_key": _ref_key(product, version, chunk["content"]),
+                        "product": product,
+                        "version": version,
+                        "scope": scope,
+                        "doc_section": chunk["section"],
+                        "content": chunk["content"],
+                        "source": source_url,
+                        "chunk_index": chunk_index,
+                        "ingested_at": time.time(),
+                    },
+                )
+            )
+
+        qdrant.upsert(
+            collection_name=QDRANT_COLLECTION,
+            points=points,
+            wait=True,
+        )
+        processed += len(batch)
+        upserted += len(points)
+        if progress_fn is not None:
+            progress_fn(total, processed, upserted)
+
+    if record_provenance:
+        _record_provenance(product, version, scope, source_url, total, upserted)
+    return {"chunk_count": total, "processed_chunks": processed, "upserted_count": upserted}
+
+
 def _ingest_text_internal(
     qdrant: QdrantClient,
     *,
@@ -266,59 +391,29 @@ def _ingest_text_internal(
     scope: str,
     source_url: str,
 ) -> str:
-    """Chunk, embed, and upsert text as reference memory. Idempotent.
-
-    Promoted to module scope (was previously nested inside
-    register_content_tools, which made `from content_plane import
-    _ingest_text_internal` fail and prevented the MCP server from starting).
-    The Qdrant client is now passed explicitly instead of captured via closure.
-    """
-    chunks = _chunk_markdown(text)
-    if not chunks:
-        return "No content extracted — check the source text."
-
-    texts = [c["content"] for c in chunks]
+    """Synchronous bounded ingestion used for explicit text and Git operations."""
     try:
-        vectors = _embed(texts)
-    except Exception as e:
-        return f"Embedding failed: {e}"
+        stats = _ingest_reference_content(
+            qdrant,
+            text=text,
+            product=product,
+            version=version,
+            scope=scope,
+            source_url=source_url,
+        )
+    except Exception as exc:
+        return f"Reference ingestion failed: {exc}"
 
-    points = []
-    for i, (chunk, vec) in enumerate(zip(chunks, vectors)):
-        cid = _chunk_id(product, version, chunk["content"])
-        points.append(PointStruct(
-            id=cid,
-            vector={"dense": vec},
-            payload={
-                "memory_type": "reference_memory",
-                "ref_key": _ref_key(product, version, chunk["content"]),
-                "product": product,
-                "version": version,
-                "scope": scope,
-                "doc_section": chunk["section"],
-                "content": chunk["content"],
-                "source": source_url,
-                "chunk_index": i,
-                "ingested_at": time.time(),
-            }
-        ))
-
-    try:
-        qdrant.upsert(collection_name=QDRANT_COLLECTION, points=points)
-    except Exception as e:
-        return f"Qdrant upsert failed after embedding {len(points)} chunks: {e}"
-
-    try:
-        _record_provenance(product, version, scope, source_url, len(chunks), len(points))
-    except Exception as e:
-        log.warning(f"Provenance record failed (non-fatal): {e}")
-
-    log.info(f"Operator action: INGEST_REFERENCE product={product} version={version} chunks={len(points)}")
+    log.info(
+        "Operator action: INGEST_REFERENCE product=%s version=%s chunks=%s",
+        product,
+        version,
+        stats["upserted_count"],
+    )
     return (
-        f"✅ Ingested **{len(points)} chunks** for `{product}@{version}` ({scope}).\n"
-        f"Source: {source_url}\n"
-        f"Sections: {', '.join(set(c['section'] for c in chunks[:8]))}"
-        + (" ..." if len(chunks) > 8 else "")
+        f"✅ Ingested **{stats['upserted_count']} chunks** for "
+        f"`{product}@{version}` ({scope}).\n"
+        f"Source: {source_url}"
     )
 
 
@@ -340,8 +435,8 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
         version: str,
         scope: str = "general",
     ) -> str:
-        """[Reference] Fetch a URL and ingest it as chunked reference memory.
-        Chunks deterministically by H2 section. Idempotent — safe to re-run.
+        """[Reference] Queue a URL for durable, bounded reference-memory ingestion.
+        The worker fetches, chunks, embeds, and upserts asynchronously.
 
         Examples:
           product=memory-steward  version=1.0  scope=architecture
@@ -349,18 +444,45 @@ def register_content_tools(mcp: FastMCP, qdrant: QdrantClient, _unused_embed_fn=
           product=kubernetes      version=1.29 scope=operations
         """
         try:
-            raw_text = _fetch_url(url)
-        except Exception as e:
-            return f"Failed to fetch {url}: {e}"
+            job_id = enqueue_url_job(
+                url=url,
+                product=product,
+                version=version,
+                scope=scope,
+            )
+        except Exception as exc:
+            return f"Failed to queue reference ingestion: {exc}"
 
-        return _ingest_text_internal(
-            qdrant,
-            text=raw_text,
-            product=product,
-            version=version,
-            scope=scope,
-            source_url=url,
+        return (
+            f"Queued reference ingestion job `{job_id}` for `{product}@{version}`.\n"
+            "Use `ref_ingest_status` to follow progress."
         )
+
+    @mcp.tool(name="ref_ingest_status")
+    def ingest_reference_status(job_id: str) -> str:
+        """[Reference] Show one durable URL-ingestion job and its progress."""
+        job = get_job(job_id)
+        if job is None:
+            return f"Reference ingestion job not found: {job_id}"
+        return json.dumps(job, indent=2, default=str)
+
+    @mcp.tool(name="ref_ingest_jobs")
+    def ingest_reference_jobs(limit: int = 20) -> str:
+        """[Reference] List recent durable URL-ingestion jobs."""
+        return json.dumps(list_jobs(limit=limit), indent=2, default=str)
+
+    @mcp.tool(name="ref_ingest_cancel")
+    def ingest_reference_cancel(job_id: str) -> str:
+        """[Reference] Cancel a queued job or request cancellation of a running job."""
+        state = request_cancel(job_id)
+        return f"Reference ingestion job `{job_id}` cancel result: {state}."
+
+    @mcp.tool(name="ref_ingest_retry")
+    def ingest_reference_retry(job_id: str) -> str:
+        """[Reference] Explicitly requeue a failed or cancelled ingestion job."""
+        if retry_job(job_id):
+            return f"Reference ingestion job `{job_id}` requeued."
+        return f"Reference ingestion job `{job_id}` is not failed/cancelled or does not exist."
 
     @mcp.tool(name="ref_ingest_text")
     def ingest_reference_text(

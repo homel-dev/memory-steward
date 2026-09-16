@@ -47,11 +47,15 @@ The implemented ingestion surface lives in `memory-steward-mcp` content-plane to
 
 - `ref_ingest_url`
 - `ref_ingest_text`
+- `ref_ingest_status`
+- `ref_ingest_jobs`
+- `ref_ingest_cancel`
+- `ref_ingest_retry`
 - `ref_list`
 - `ref_inspect`
 - `ref_purge`
 
-Ingestion is synchronous in the current implementation; these tools do not return a background job handle.
+URL ingestion is durable and asynchronous. `ref_ingest_url` inserts a `reference_ingestion_jobs` row and returns its UUID immediately; `reference-ingest-worker` performs bounded fetch/chunk/embed/upsert work. `ref_ingest_text` and Git ingestion remain synchronous but share the same bounded batching implementation.
 
 [Back to top](#navigation)
 
@@ -163,16 +167,24 @@ Unknown filter names are rejected at Pydantic request validation. This keeps the
 
 | Path | Initiator | Input | Result |
 | --- | --- | --- | --- |
-| ref_ingest_url | Operator/MCP client | URL + metadata | Server-side fetch, chunking/embedding, Reference Memory upsert + ingestion record |
+| ref_ingest_url | Operator/MCP client | URL + metadata | Durable Postgres job; worker performs bounded fetch, chunking, embedding, Qdrant upsert, and provenance |
 | ref_ingest_text | Operator/MCP client | Text + metadata | Chunking/embedding and Reference Memory upsert |
 | git_ingest_repo | Operator/MCP Git plane | Registered repository selection | Repository content ingested into reference lane |
 | git_ingest_file | Operator/MCP Git plane | One repository file | Selected file ingested into reference lane |
 
 Reference ingestion is explicit. Ordinary chat admission does not promote conversational text into Reference Memory.
 
-## 11. Search and Get APIs
+## 11. Durable URL Ingestion Lifecycle
 
-### 11.1 `POST /v1/reference/search`
+The queue is canonical Postgres state in `reference_ingestion_jobs`. Workers claim one queued row using `FOR UPDATE SKIP LOCKED`, increment `attempt_count`, and fence every progress/final update by `(job_id, worker_id, attempt_count)`. A stale lease is requeued; if cancellation was already requested, lease expiry finalizes it as cancelled instead. Application failures are left `failed` and are retried only by explicit `ref_ingest_retry`.
+
+The worker fetches at most 64 MiB of decompressed response data, then processes reference chunks in batches of 8. Each batch is embedded independently and synchronously upserted to Qdrant with `wait=true`. Deterministic point ids make partial work safe to retry; if a job fails after an earlier Qdrant batch, those already-written chunks remain visible until the job is retried to completion or the namespace is explicitly purged. Successful job completion and insertion of the immutable `reference_ingestion` provenance row use one Postgres transaction.
+
+The embeddings service independently enforces its own limits: at most 64 texts per request, FastEmbed batch size 16, ONNX/native thread bounds, and a Kubernetes CPU limit. These service-side limits are a second barrier if another caller bypasses the reference worker.
+
+## 12. Search and Get APIs
+
+### 12.1 `POST /v1/reference/search`
 
 Inputs:
 
@@ -182,20 +194,24 @@ Inputs:
 
 The Router embeds the query, searches the reference lane, and returns normalized candidate payloads. Project identity is still resolved for request context/telemetry even though canonical reference documents are not learned project facts.
 
-### 11.2 `GET /v1/reference/{chunk_id}`
+### 12.2 `GET /v1/reference/{chunk_id}`
 
 Fetches one reference chunk by identifier. Missing chunks return HTTP 404 rather than an empty success object.
 
-### 11.3 `POST /v1/context/retrieve`
+### 12.3 `POST /v1/context/retrieve`
 
 Structured agent retrieval can combine reference material with static, dynamic, and explicitly selected deterministic artifacts. `reference_filters` are passed through unchanged to the same reference retrieval implementation.
 
-## 12. MCP Reference Operations
+## 13. MCP Reference Operations
 
 | Tool | Class | Operational intent |
 | --- | --- | --- |
-| ref_ingest_url | Mutating | Fetch and ingest a reference URL into canonical Reference Memory |
+| ref_ingest_url | Mutating | Queue durable URL ingestion and return the job id |
 | ref_ingest_text | Mutating | Ingest operator-provided reference text |
+| ref_ingest_status | Read-only | Inspect one queued/running/final URL-ingestion job |
+| ref_ingest_jobs | Read-only | List recent URL-ingestion jobs |
+| ref_ingest_cancel | Mutating | Cancel queued work or request cancellation between bounded batches |
+| ref_ingest_retry | Mutating | Explicitly retry failed/cancelled work |
 | ref_list | Read-only | List reference ingestion namespaces/events |
 | ref_inspect | Read-only | Inspect stored reference chunks by metadata |
 | ref_purge | Destructive | Delete reference data for an explicit selection |
@@ -206,7 +222,7 @@ Structured agent retrieval can combine reference material with static, dynamic, 
 
 Operators SHOULD use live tool discovery before automation because FastMCP is the schema authority for exact argument names.
 
-## 13. Reference Eligibility vs Filtering
+## 14. Reference Eligibility vs Filtering
 
 Two independent gates exist:
 
@@ -215,7 +231,7 @@ Two independent gates exist:
 
 Do not encode product/topic policy in mode. A KiCad request can use `mode=engineering` and `reference_filters={product:kicad, version:9.0}`; those fields solve different problems.
 
-## 14. Reference Memory vs Agent Artifacts
+## 15. Reference Memory vs Agent Artifacts
 
 | Property | Reference Memory | agent_reference |
 | --- | --- | --- |
@@ -226,13 +242,13 @@ Do not encode product/topic policy in mode. A KiCad request can use `mode=engine
 | Automatic promotion | No | No promotion to Reference Memory |
 | Typical example | Product manual/API documentation | Generated pin map, test result, machine-readable analysis artifact |
 
-## 15. Provenance and Versioning Guidance
+## 16. Provenance and Versioning Guidance
 
 Reference metadata SHOULD be specific enough to prevent silent cross-version blending. When the source has a meaningful version, store it explicitly and have engineering agents request that version. Source and provider fields SHOULD remain stable identifiers rather than free-form commentary.
 
 When replacing a corpus version, prefer explicit ingestion of the new version and an explicit purge/retention decision for the old version. Do not rely on semantic similarity to distinguish incompatible versions.
 
-## 16. Failure and Safety Matrix
+## 17. Failure and Safety Matrix
 
 | Condition | Expected behavior |
 | --- | --- |
@@ -245,7 +261,7 @@ When replacing a corpus version, prefer explicit ingestion of the new version an
 | Purge requested | Require explicit operator invocation; Task shortcut prompts |
 | URL ingestion targets sensitive/internal network | Current implementation needs egress/SSRF hardening; treat this as an operational security concern |
 
-## 17. Verification Cases
+## 18. Verification Cases
 
 Tests and operator checks SHOULD cover:
 

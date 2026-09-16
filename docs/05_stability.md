@@ -118,6 +118,10 @@ If mode stabilization is implemented later, the change MUST add a runtime consum
 | LIST | WHISPER_MODEL_SIZE | component default | Whisper model size |
 | TUI | STEWARD_MCP_URL | http://127.0.0.1:8081/mcp | MCP server URL |
 | Embeddings | MODEL_NAME | BAAI/bge-small-en-v1.5 | Embedding model |
+| Embeddings | EMBEDDING_THREADS | 4 in manifest/code default | ONNX intra/inter-op thread bound |
+| Embeddings | EMBEDDING_CONCURRENCY | 1 in manifest/code default | Maximum concurrent model executions |
+| Embeddings | EMBEDDING_BATCH_SIZE | 16 in manifest/code default | Internal FastEmbed batch bound |
+| Embeddings | EMBEDDING_MAX_TEXTS | 64 in manifest/code default | Maximum texts accepted by one /embed request |
 
 The table intentionally distinguishes code defaults from manifest values. Deployment manifests are the effective checked-in operating profile; code defaults are fallback behavior when an environment value is omitted.
 
@@ -143,7 +147,8 @@ A key is active only when code consumes it.
 | memory-steward | GET /healthz | Postgres, Qdrant, embeddings, Steward LLM | Agent artifact persistence and extraction have different dependencies |
 | memory-steward-mcp | /healthz on MCP service | Postgres/Qdrant plus Router/Steward for adapter tools | Internal control surface |
 | memory-steward-list | GET /healthz | Local Whisper model/runtime | No memory database access by design |
-| embeddings | GET /healthz | Embedding model loaded | Shared by Router and Steward |
+| embeddings | GET /healthz | Embedding model loaded | Shared by Router, Steward, and reference ingestion; CPU/thread bounded |
+| reference-ingest-worker | no HTTP endpoint | Postgres queue, embeddings, Qdrant, source URL egress | One durable URL job at a time per replica |
 
 ## 8. Operational Recovery Order
 
@@ -153,9 +158,10 @@ A practical recovery sequence is:
 2. verify Postgres and Qdrant readiness;
 3. verify embeddings;
 4. verify Router and Steward;
-5. verify MCP and optional LIST/Open WebUI;
-6. run `task ops:service:health` or the repository health task;
-7. inspect diagnostics and logs before destructive reset operations.
+5. verify MCP and the reference-ingest worker;
+6. verify optional LIST/Open WebUI;
+7. run `task ops:service:health` or the repository health task;
+8. inspect diagnostics and logs before destructive reset operations.
 
 Stateful restarts are intentionally separate and prompted. Do not use a generic application restart as a substitute for diagnosing storage corruption or migration mismatch.
 
@@ -168,6 +174,9 @@ Stateful restarts are intentionally separate and prompted. Do not use a generic 
 | Builder endpoint fails | Chat request fails at upstream dispatch; telemetry records error |
 | Steward async admission fails | Chat response may already be complete; admission failure is isolated |
 | Qdrant fails | Semantic lanes fail; do not fabricate context |
+| Reference worker or source fetch fails | Durable URL job becomes failed; no automatic application retry; explicit retry is required |
+| Reference worker exits mid-job | Lease fencing prevents stale completion; expired running work is requeued |
+| Oversized embedding request | Embeddings returns HTTP 413 rather than scheduling unbounded work |
 | MCP process-local cache is stale | Only MCP static cache consumers are affected; Router does not consume that cache |
 | LIST model load fails at startup | Startup handler logs failure; first request may retry model loading |
 | TUI cannot reach MCP | TUI reports connection error and suggests port-forward; it does not mutate state |

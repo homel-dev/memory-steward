@@ -39,6 +39,7 @@ graph TD
     Router[memory-router]
     Steward[memory-steward]
     MCP[memory-steward-mcp]
+    RefWorker[reference-ingest-worker]
     LIST[memory-steward-list]
     Emb[embeddings]
     Builder[Builder LLM]
@@ -50,7 +51,12 @@ graph TD
     Agent -->|MCP tools| MCP
     MCP -->|agent retrieval adapters| Router
     MCP -->|operator content/config/diagnostics| PG
-    MCP -->|reference content/diagnostics| Q
+    MCP -->|queue reference URL jobs| PG
+    RefWorker -->|claim/progress reference jobs| PG
+    RefWorker -->|bounded embedding| Emb
+    RefWorker -->|bounded reference upserts| Q
+    MCP -->|reference text/Git + diagnostics| Q
+    MCP -->|bounded reference text/Git embedding| Emb
     Router -->|dense embedding| Emb
     Router -->|static + artifact reads| PG
     Router -->|dynamic/reference retrieval| Q
@@ -255,11 +261,13 @@ Replay -> Steward: return stored completed result with idempotent_replay=true
 | Postgres static_memory | MCP/operator tooling | Router, MCP | Global and exact-mode static rules |
 | Postgres dynamic_memory | Steward | Router, MCP diagnostics | Durable learned fragments and metadata |
 | Postgres runtime_config | MCP configuration tools | Router for active keys; MCP diagnostics | Live configuration key/value store |
+| Postgres reference_ingestion_jobs | MCP queue tools + reference-ingest-worker | MCP queue tools + reference-ingest-worker | Durable URL-ingestion queue, lease, progress, cancellation, final state |
+| Postgres reference_ingestion | reference-ingest-worker and synchronous reference ingestion | Operators/diagnostics | Immutable successful-ingestion provenance |
 | Postgres agent_outcome_submission | Steward | Steward | Outcome idempotency and completed response persistence |
 | Postgres agent_reference | Steward | Router structured retrieval | Deterministic reusable agent artifacts |
 | Postgres context_feedback | Steward | Diagnostics/analysis | Used/irrelevant/missing-context feedback |
 | Postgres telemetry.* | Router/Steward | MCP diagnostics / observability | Operational evidence; not prompt memory |
-| Qdrant homel_memory | Steward and explicit reference ingestion | Router / MCP diagnostics | Semantic index for dynamic and reference memory |
+| Qdrant homel_memory | Steward, reference-ingest-worker, and synchronous explicit reference ingestion | Router / MCP diagnostics | Semantic index for dynamic and reference memory |
 
 ## 11. Memory-Type Semantics
 

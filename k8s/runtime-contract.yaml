@@ -7,6 +7,10 @@ metadata:
 data:
   QDRANT_URL: "http://qdrant:6333"
   EMBEDDINGS_URL: "http://embeddings:8000"
+  REFERENCE_EMBED_BATCH_SIZE: "8"
+  REFERENCE_FETCH_MAX_BYTES: "67108864"
+  REFERENCE_INGEST_POLL_SECONDS: "2"
+  REFERENCE_INGEST_LEASE_SECONDS: "300"
   BUILDER_BASE_URL: "https://api.openai.com/v1"
   STEWARD_URL: "http://memory-steward:8090"
   MEMORY_ROUTER_URL: "http://memory-router:8080"

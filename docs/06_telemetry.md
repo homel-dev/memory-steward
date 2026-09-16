@@ -111,7 +111,8 @@ Before merging a telemetry change:
 | public | static_memory | Human/operator-authored static rules |
 | public | dynamic_memory | Steward-admitted durable facts |
 | public | runtime_config | Live key/value configuration |
-| public | reference_ingestion | Reference ingestion audit/metadata |
+| public | reference_ingestion | Successful Reference ingestion audit/provenance |
+| public | reference_ingestion_jobs | Durable Reference URL ingestion queue, lease/progress/final state |
 | public | git_connections | Repository connection metadata |
 | public | agent_outcome_submission | AMP idempotency and result state |
 | public | agent_reference | Deterministic reusable agent artifacts |
@@ -237,7 +238,8 @@ Telemetry is a diagnostics plane with bounded operational exposure. It MUST rema
 | public | static_memory | Human/operator-authored static rules |
 | public | dynamic_memory | Steward-admitted durable facts |
 | public | runtime_config | Live key/value configuration |
-| public | reference_ingestion | Reference ingestion audit/metadata |
+| public | reference_ingestion | Successful Reference ingestion audit/provenance |
+| public | reference_ingestion_jobs | Durable Reference URL ingestion queue, lease/progress/final state |
 | public | git_connections | Repository connection metadata |
 | public | agent_outcome_submission | AMP idempotency and result state |
 | public | agent_reference | Deterministic reusable agent artifacts |
@@ -371,6 +373,32 @@ Source: `sql/migrations/030_reference_ingestion.sql`.
 | chunk_count | INTEGER NOT NULL DEFAULT 0 |
 | upserted_count | INTEGER NOT NULL DEFAULT 0 |
 | ingested_at | TIMESTAMPTZ NOT NULL DEFAULT now() |
+
+### `reference_ingestion_jobs`
+
+Source: `sql/migrations/100_reference_ingestion_jobs.sql`.
+
+| Column | SQL definition |
+| --- | --- |
+| id | UUID PRIMARY KEY DEFAULT gen_random_uuid() |
+| url | TEXT NOT NULL |
+| product | TEXT NOT NULL |
+| version | TEXT NOT NULL |
+| scope | TEXT NOT NULL DEFAULT 'general' |
+| status | TEXT NOT NULL DEFAULT 'queued'; queued/running/succeeded/failed/cancelled |
+| attempt_count | INTEGER NOT NULL DEFAULT 0 |
+| worker_id | TEXT |
+| cancel_requested | BOOLEAN NOT NULL DEFAULT FALSE |
+| chunk_count | INTEGER NOT NULL DEFAULT 0 |
+| processed_chunks | INTEGER NOT NULL DEFAULT 0 |
+| upserted_count | INTEGER NOT NULL DEFAULT 0 |
+| error | TEXT |
+| created_at | TIMESTAMPTZ NOT NULL DEFAULT now() |
+| updated_at | TIMESTAMPTZ NOT NULL DEFAULT now() |
+| started_at | TIMESTAMPTZ |
+| heartbeat_at | TIMESTAMPTZ |
+| finished_at | TIMESTAMPTZ |
+
 ### `admission_candidate`
 
 Source: `sql/migrations/060_admission_control.sql`.

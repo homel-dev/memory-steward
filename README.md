@@ -13,9 +13,10 @@ Memory Steward is a self-hosted memory control plane for LLM and agent workloads
 | `memory-router` | OpenAI-compatible chat ingress, project resolution, static/dynamic/reference retrieval, MMR, token budgeting, prompt-envelope rendering, Builder dispatch, async chat admission |
 | `memory-steward` | Durable-memory admission from chat turns and structured agent outcomes; canonical `agent_reference` persistence; context feedback |
 | `memory-steward-mcp` | Internal operator/agent control surface implemented with FastMCP |
+| `reference-ingest-worker` | Durable background worker for bounded reference-URL fetch/chunk/embed/Qdrant ingestion |
 | `steward-tui` | Textual Glass Pane client that discovers and invokes live MCP tool schemas |
 | `memory-steward-list` | Optional local speech transcription service; translation endpoint is present but currently returns HTTP 501 |
-| `embeddings` | Dense embedding service used by Router and Steward |
+| `embeddings` | Resource-bounded dense embedding service used by Router, Steward, and reference ingestion |
 | Postgres | Canonical structured state, runtime configuration, telemetry, ingestion records, agent artifacts |
 | Qdrant | Semantic retrieval index for dynamic and canonical reference memory |
 | Open WebUI | Optional chat/operator frontend; `/glap` is bridged by Memory Router to the MCP server |
@@ -62,6 +63,7 @@ task ops:mcp:tools
 task ops:mcp:call -- ref_list
 task ops:ref:inspect -- product=kicad version=9.0 limit=10
 task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
+task ops:ref:ingest:jobs
 task ops:mcp:forward
 task tui
 ~~~
@@ -83,7 +85,7 @@ When `mode` is absent, only global static rules match, while the reference lane 
 
 ## Reference memory: current behavior
 
-Canonical reference memory is ingested explicitly through MCP content-plane tools (`ref_ingest_url`, `ref_ingest_text`) and stored/indexed with `memory_type=reference_memory`.
+Canonical reference memory is ingested explicitly through MCP content-plane tools (`ref_ingest_url`, `ref_ingest_text`) and stored/indexed with `memory_type=reference_memory`. URL ingestion is durable and asynchronous: `ref_ingest_url` enqueues a Postgres-backed job and `reference-ingest-worker` processes it in bounded embedding/Qdrant batches. Direct text and Git ingestion remain synchronous but use the same bounded batch path.
 
 Router retrieval always filters on `memory_type=reference_memory`. Optional exact-match `reference_filters` may narrow by:
 

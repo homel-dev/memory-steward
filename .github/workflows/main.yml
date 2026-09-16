@@ -55,7 +55,7 @@ jobs:
             allow_no_tests: true
           - component: embeddings
             path: components/embeddings
-            allow_no_tests: true
+            allow_no_tests: false
 
     steps:
       - name: Check out

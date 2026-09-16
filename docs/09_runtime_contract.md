@@ -44,6 +44,7 @@ The Kubernetes namespace is `ms`.
 | `memory-router` | Deployment | 8080 |
 | `memory-steward` | Deployment | 8090 |
 | `memory-steward-mcp` | Deployment | 8081 |
+| `reference-ingest-worker` | Deployment | none |
 | `memory-steward-list` | Deployment | 8001 |
 | `codegraph-listener` | Deployment | 8092 |
 | `codegraph-controller` | Deployment | 8093 |
@@ -174,7 +175,8 @@ Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns s
 | memory-steward-list | Optional speech transcription | 8001 |
 | codegraph-listener | MinIO CodeGraph object-event ingress | 8092 /events/minio |
 | codegraph-controller | PostgreSQL-backed CodeGraph lifecycle/index controller | 8093 /healthz + worker callback |
-| embeddings | Dense embedding service | 8000 |
+| embeddings | Resource-bounded dense embedding service | 8000 |
+| reference-ingest-worker | Durable Reference URL ingestion worker | none |
 | Postgres | Structured state/telemetry | 5432 |
 | Qdrant | Vector index | 6333 |
 | Open WebUI | Optional frontend | 8080 service-local |
@@ -210,6 +212,10 @@ Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns s
 | Steward | QDRANT_COLLECTION | required | Qdrant collection |
 | Steward | POSTGRES_* | required | Structured persistence |
 | Steward | EMBEDDINGS_SERVICE_HOST / PORT | required | Embedding service |
+| MCP / reference worker | REFERENCE_EMBED_BATCH_SIZE | 8 | Maximum reference chunks sent to embeddings and Qdrant per ingestion batch |
+| MCP / reference worker | REFERENCE_FETCH_MAX_BYTES | 67108864 | Maximum decompressed bytes accepted from one reference URL |
+| reference-ingest-worker | REFERENCE_INGEST_POLL_SECONDS | 2 | Empty-queue poll interval |
+| reference-ingest-worker | REFERENCE_INGEST_LEASE_SECONDS | 300 | Stale running-job lease timeout |
 | CodeGraph listener | POSTGRES_* | required | CodeGraph discovery registry persistence |
 | CodeGraph listener | CODEGRAPH_MINIO_BUCKETS / CODEGRAPH_MINIO_PREFIXES | empty | Optional event filters |
 | CodeGraph listener | CODEGRAPH_MINIO_WEBHOOK_TOKEN | empty | Optional bearer token for MinIO webhook delivery |
@@ -227,6 +233,10 @@ Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns s
 | LIST | WHISPER_MODEL_SIZE | component default | Whisper model size |
 | TUI | STEWARD_MCP_URL | http://127.0.0.1:8081/mcp | MCP server URL |
 | Embeddings | MODEL_NAME | BAAI/bge-small-en-v1.5 | Embedding model |
+| Embeddings | EMBEDDING_THREADS | 4 | ONNX intra/inter-op thread bound |
+| Embeddings | EMBEDDING_CONCURRENCY | 1 | Maximum concurrent model executions |
+| Embeddings | EMBEDDING_BATCH_SIZE | 16 | Internal FastEmbed batch size |
+| Embeddings | EMBEDDING_MAX_TEXTS | 64 | Hard maximum texts accepted by one `/embed` request |
 
 Kubernetes service-link variables (`*_SERVICE_HOST`/`*_SERVICE_PORT`) are used by Router/Steward code for several dependencies. The runtime ConfigMap also contains URL-style compatibility/operator values consumed by other components. Do not assume every ConfigMap key is read by every service.
 
@@ -237,6 +247,10 @@ The current ConfigMap contains:
 ~~~yaml
 QDRANT_URL: http://qdrant:6333
 EMBEDDINGS_URL: http://embeddings:8000
+REFERENCE_EMBED_BATCH_SIZE: 8
+REFERENCE_FETCH_MAX_BYTES: 67108864
+REFERENCE_INGEST_POLL_SECONDS: 2
+REFERENCE_INGEST_LEASE_SECONDS: 300
 BUILDER_BASE_URL: https://api.openai.com/v1
 STEWARD_URL: http://memory-steward:8090
 MEMORY_ROUTER_URL: http://memory-router:8080
@@ -289,6 +303,7 @@ OPEN_WEBUI_URL: http://open-webui:8080
 | ops:service:restart:router | Restart Router |
 | ops:service:restart:steward | Restart Steward |
 | ops:service:restart:mcp | Restart MCP |
+| ops:service:restart:reference-ingest | Restart reference ingestion worker |
 | ops:service:restart:list | Restart LIST |
 | ops:service:restart:embeddings | Restart embeddings |
 | ops:service:restart:webui | Restart Open WebUI |
@@ -301,7 +316,11 @@ OPEN_WEBUI_URL: http://open-webui:8080
 | ops:mcp:forward | Loopback-only MCP port-forward |
 | ops:ref:list | Reference list shortcut |
 | ops:ref:inspect | Reference inspect shortcut |
-| ops:ref:ingest:url | Reference URL ingestion shortcut |
+| ops:ref:ingest:url | Queue durable Reference URL ingestion |
+| ops:ref:ingest:jobs | List recent durable ingestion jobs |
+| ops:ref:ingest:status | Inspect one ingestion job |
+| ops:ref:ingest:cancel | Cancel/request cancellation |
+| ops:ref:ingest:retry | Explicitly requeue failed/cancelled work |
 | ops:ref:ingest:text | Reference text ingestion shortcut |
 | ops:ref:purge | Prompted reference purge shortcut |
 | ops:ref:search | Reference search shortcut |

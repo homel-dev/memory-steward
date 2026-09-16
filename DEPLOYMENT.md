@@ -128,6 +128,8 @@ Current manifests include both fixed and floating tags. Do not assume every work
 | ops:service:restart:router | Restart Router |
 | ops:service:restart:steward | Restart Steward |
 | ops:service:restart:mcp | Restart MCP |
+| ops:service:restart:reference-ingest | Restart reference ingestion worker |
+| ops:logs:reference-ingest | Tail reference ingestion worker logs |
 | ops:service:restart:list | Restart LIST |
 | ops:service:restart:codegraph | Restart CodeGraph listener/controller |
 | ops:service:restart:embeddings | Restart embeddings |
@@ -141,7 +143,11 @@ Current manifests include both fixed and floating tags. Do not assume every work
 | ops:mcp:forward | Loopback-only MCP port-forward |
 | ops:ref:list | Reference list shortcut |
 | ops:ref:inspect | Reference inspect shortcut |
-| ops:ref:ingest:url | Reference URL ingestion shortcut |
+| ops:ref:ingest:url | Queue Reference URL ingestion |
+| ops:ref:ingest:jobs | List recent Reference URL jobs |
+| ops:ref:ingest:status | Inspect one Reference URL job |
+| ops:ref:ingest:cancel | Cancel/request cancellation of a Reference URL job |
+| ops:ref:ingest:retry | Explicitly retry failed/cancelled Reference URL work |
 | ops:ref:ingest:text | Reference text ingestion shortcut |
 | ops:ref:purge | Prompted reference purge shortcut |
 | ops:ref:search | Reference search shortcut |

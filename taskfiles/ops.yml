@@ -18,6 +18,7 @@ tasks:
       - kubectl rollout status deployment/memory-router -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/memory-steward -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/memory-steward-mcp -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status deployment/reference-ingest-worker -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/memory-steward-list -n {{.NAMESPACE}} --timeout=300s
       - kubectl rollout status deployment/codegraph-listener -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/codegraph-controller -n {{.NAMESPACE}} --timeout=180s
@@ -53,18 +54,18 @@ tasks:
     desc: 'Stop stateless application Deployments; keep Postgres/Qdrant stateful stores running'
     prompt: 'Scale all Memory Steward application Deployments to 0 in namespace {{.NAMESPACE}}?'
     cmds:
-      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui --replicas=0 -n {{.NAMESPACE}}
+      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui --replicas=0 -n {{.NAMESPACE}}
 
   app:start:
     desc: 'Start stateless application Deployments and wait until they are Ready'
     cmds:
-      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui --replicas=1 -n {{.NAMESPACE}}
+      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui --replicas=1 -n {{.NAMESPACE}}
       - task: service:wait
 
   service:restart:
     desc: 'Restart all stateless Memory Steward application services'
     cmds:
-      - kubectl rollout restart deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui -n {{.NAMESPACE}}
+      - kubectl rollout restart deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui -n {{.NAMESPACE}}
       - kubectl rollout restart daemonset/vector-agent -n {{.NAMESPACE}}
       - task: service:wait
 
@@ -85,6 +86,12 @@ tasks:
     cmds:
       - kubectl rollout restart deployment/memory-steward-mcp -n {{.NAMESPACE}}
       - kubectl rollout status deployment/memory-steward-mcp -n {{.NAMESPACE}} --timeout=180s
+
+  service:restart:reference-ingest:
+    desc: 'Restart reference ingestion worker'
+    cmds:
+      - kubectl rollout restart deployment/reference-ingest-worker -n {{.NAMESPACE}}
+      - kubectl rollout status deployment/reference-ingest-worker -n {{.NAMESPACE}} --timeout=180s
 
   service:restart:list:
     desc: 'Restart memory-steward-list service'
@@ -135,6 +142,11 @@ tasks:
     desc: 'Tail memory-steward-mcp logs'
     cmds:
       - kubectl logs -n {{.NAMESPACE}} deployment/memory-steward-mcp -f --tail=200
+
+  logs:reference-ingest:
+    desc: 'Tail reference ingestion worker logs'
+    cmds:
+      - kubectl logs -n {{.NAMESPACE}} deployment/reference-ingest-worker -f --tail=200
 
   logs:list:
     desc: 'Tail memory-steward-list logs'
@@ -209,6 +221,35 @@ tasks:
         msg: 'Pass ref_ingest_url arguments after --.'
     cmds:
       - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_url {{.CLI_ARGS}} --auth none
+
+  ref:ingest:jobs:
+    desc: 'List recent durable reference ingestion jobs'
+    cmds:
+      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_jobs --auth none
+
+  ref:ingest:status:
+    desc: 'Show reference ingestion job: task ops:ref:ingest:status -- job_id=<uuid>'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass job_id after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_status {{.CLI_ARGS}} --auth none
+
+  ref:ingest:cancel:
+    desc: 'Cancel reference ingestion job: task ops:ref:ingest:cancel -- job_id=<uuid>'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass job_id after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_cancel {{.CLI_ARGS}} --auth none
+
+  ref:ingest:retry:
+    desc: 'Retry failed/cancelled reference ingestion job: task ops:ref:ingest:retry -- job_id=<uuid>'
+    preconditions:
+      - sh: test -n '{{.CLI_ARGS}}'
+        msg: 'Pass job_id after --.'
+    cmds:
+      - kubectl exec -i -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_ingest_retry {{.CLI_ARGS}} --auth none
 
   ref:purge:
     desc: 'Purge one reference namespace: task ops:ref:purge -- product=... version=...'

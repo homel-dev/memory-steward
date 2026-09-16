@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reference-ingest-worker
+  namespace: ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reference-ingest-worker
+  template:
+    metadata:
+      labels:
+        app: reference-ingest-worker
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: ghcr.io/homel-dev/memory-steward/memory-steward-mcp:latest
+          imagePullPolicy: Always
+          command:
+            - nice
+            - -n
+            - "10"
+            - ionice
+            - -c
+            - "2"
+            - -n
+            - "7"
+            - python
+            - -m
+            - memory_steward_mcp.ingest_worker
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+          env:
+            - name: POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: homel-postgres
+                  key: POSTGRES_DSN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi

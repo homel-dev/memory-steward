@@ -26,13 +26,38 @@ spec:
     spec:
       containers:
         - name: embeddings
-          image: ghcr.io/homel-dev/memory-steward/embeddings:0.1.0
+          image: ghcr.io/homel-dev/memory-steward/embeddings:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
           env:
             - name: MODEL_NAME
               value: BAAI/bge-small-en-v1.5
+            - name: EMBEDDING_THREADS
+              value: "4"
+            - name: EMBEDDING_BATCH_SIZE
+              value: "16"
+            - name: EMBEDDING_MAX_TEXTS
+              value: "64"
+            - name: EMBEDDING_CONCURRENCY
+              value: "1"
+            - name: OMP_NUM_THREADS
+              value: "4"
+            - name: MKL_NUM_THREADS
+              value: "4"
+            - name: OPENBLAS_NUM_THREADS
+              value: "4"
+            - name: NUMEXPR_NUM_THREADS
+              value: "4"
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 2Gi
           readinessProbe:
             httpGet:
               path: /healthz

@@ -98,7 +98,7 @@ task verify:health
 task verify:amp
 ~~~
 
-The wait/status surface covers Postgres, Qdrant, embeddings, Router, Steward, MCP, LIST, Open WebUI, and Vector. `verify:health` performs HTTP readiness checks from the Router pod using Python `requests` (already present in the Router package) and uses `pg_isready` for Postgres; it does not assume `curl` exists in the Router image.
+The wait/status surface covers Postgres, Qdrant, embeddings, Router, Steward, MCP, the reference-ingest worker, LIST, CodeGraph, Open WebUI, and Vector. `verify:health` performs HTTP readiness checks from the Router pod using Python `requests` (already present in the Router package) and uses `pg_isready` for Postgres; it does not assume `curl` exists in the Router image.
 
 [Back to top](#navigation)
 
@@ -150,9 +150,9 @@ Important policy characteristics include:
 | --- | --- | --- |
 | memory-router | Ruff + pytest | history pruning, reference filters, structured context, MCP bridge, static/dynamic/reference separation |
 | memory-steward | Ruff + pytest | fragment extraction parsing, persistence behavior, AMP idempotency/artifacts/feedback |
-| memory-steward-mcp | Ruff + pytest | tool registration, reference agent adapters, config/diagnostic contracts |
+| memory-steward-mcp | Ruff + pytest | tool registration, durable reference-ingestion queue/batching, reference agent adapters, config/diagnostic contracts |
 | memory-steward-list | Ruff + pytest when present | route contract and transcription service behavior |
-| embeddings | Ruff + pytest when present | health/embed contract and model wrapper behavior |
+| embeddings | Ruff + pytest | health/embed contract, request-size rejection, bounded FastEmbed invocation |
 | steward_tui | pytest/ruff when integrated into CI or run manually | schema parsing, type coercion, tool discovery/invocation rendering |
 
 ## 10. Documentation Verification
@@ -177,6 +177,7 @@ and the organization repository policy used by CI. Reviewers SHOULD additionally
 | Stateful restart | Use prompted Postgres/Qdrant restart tasks and verify data readiness |
 | MCP | List live tools and call a read-only diagnostic operation |
 | Reference lane | Ingest/search/get test data in a non-production namespace or controlled corpus |
+| Reference URL worker | Queue a controlled URL, inspect progress, verify bounded completion/cancel/retry behavior |
 | AMP | Run `task verify:amp` and inspect idempotency/artifact behavior |
 | Images | Confirm manifests reference the intended published tags/digests; local `task build` alone does not alter GHCR references |
 

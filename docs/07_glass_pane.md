@@ -143,8 +143,12 @@ The table below reflects the tools registered by the current MCP implementation.
 
 | Tool | Class | Purpose |
 | --- | --- | --- |
-| `ref_ingest_url` | Mutating | Fetch and ingest a reference URL into canonical Reference Memory |
+| `ref_ingest_url` | Mutating | Queue durable background ingestion of a reference URL |
 | `ref_ingest_text` | Mutating | Ingest operator-provided reference text |
+| `ref_ingest_status` | Read-only | Inspect one durable URL-ingestion job and progress |
+| `ref_ingest_jobs` | Read-only | List recent durable URL-ingestion jobs |
+| `ref_ingest_cancel` | Mutating | Cancel queued work or request cancellation between batches |
+| `ref_ingest_retry` | Mutating | Explicitly requeue failed/cancelled work |
 | `ref_list` | Read-only | List recorded Reference Memory ingestion namespaces/events |
 | `ref_inspect` | Read-only | Inspect stored reference chunks by exact metadata |
 | `ref_purge` | Destructive | Delete canonical reference chunks for an explicit product/version |
@@ -349,7 +353,7 @@ The headless Textual tests cover:
 
 ## 6. Reference-Memory Operator Workflow
 
-Reference ingestion is explicit and synchronous.
+Reference ingestion is explicit. URL ingestion is durable and asynchronous; raw-text and Git ingestion remain synchronous but are resource-bounded.
 
 ~~~bash
 ## Discover the live schema first.
@@ -361,8 +365,12 @@ task ops:ref:list
 ## Inspect one product/version.
 task ops:ref:inspect -- product=kicad version=9.0 limit=10
 
-## Ingest an authoritative URL.
+## Queue an authoritative URL.
 task ops:ref:ingest:url -- url=https://example.invalid/docs product=kicad version=9.0 scope=pcb
+
+## Follow durable ingestion state.
+task ops:ref:ingest:jobs
+task ops:ref:ingest:status -- job_id=<uuid>
 
 ## Search canonical Reference Memory through the Router-owned agent adapter.
 task ops:ref:search -- project_id=operator query="hierarchical sheet syntax"
@@ -401,7 +409,7 @@ Mutating and destructive operations MUST remain explicit and auditable. In parti
 - `static_delete` permanently deletes a static-memory row;
 - `git_write_file` mutates an external repository and requires a `read-write` connection;
 - repository connection records contain provider credentials and belong on a trusted internal boundary;
-- `ref_ingest_url` performs server-side URL fetching and therefore has SSRF/egress implications.
+- `ref_ingest_url` queues work; `reference-ingest-worker` performs the server-side URL fetch and therefore has SSRF/egress implications.
 
 The MCP transport layer MUST NOT be treated as the authority for Router retrieval policy or Steward admission policy.
 

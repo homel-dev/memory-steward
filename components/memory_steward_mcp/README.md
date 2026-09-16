@@ -14,8 +14,12 @@ FastMCP internal control and adapter surface. It exposes content, stability/conf
 
 | Plane | Tool | Class | Purpose |
 | --- | --- | --- | --- |
-| content | ref_ingest_url | Mutating | Fetch and ingest a reference URL into canonical Reference Memory |
+| content | ref_ingest_url | Mutating | Queue durable background ingestion of a reference URL |
 | content | ref_ingest_text | Mutating | Ingest operator-provided reference text |
+| content | ref_ingest_status | Read-only | Inspect one durable URL-ingestion job and progress |
+| content | ref_ingest_jobs | Read-only | List recent durable URL-ingestion jobs |
+| content | ref_ingest_cancel | Mutating | Cancel a queued job or request cancellation at the next batch boundary |
+| content | ref_ingest_retry | Mutating | Explicitly requeue a failed/cancelled job |
 | content | ref_list | Read-only | List reference ingestion namespaces/events |
 | content | ref_inspect | Read-only | Inspect stored reference chunks by metadata |
 | content | ref_purge | Destructive | Delete reference data for an explicit selection |
@@ -62,3 +66,9 @@ Keep the service internal. For local clients use `task ops:mcp:forward` and `htt
 ## Compatibility config note
 
 `config_force_mode` and `config_set_hysteresis` persist compatibility values that have no current Router/Steward policy consumer.
+
+## Reference ingestion execution
+
+`ref_ingest_url` does not fetch or embed the document in the MCP request. It writes a durable `reference_ingestion_jobs` row and returns the job id. The `reference-ingest-worker` Deployment claims jobs with `FOR UPDATE SKIP LOCKED`, fences updates by worker id plus attempt count, fetches with a 64 MiB decompressed-content ceiling, and embeds/upserts in bounded batches. Qdrant writes use `wait=true`; completion and the immutable `reference_ingestion` provenance row are committed together in Postgres.
+
+`ref_ingest_text` and Git ingestion are synchronous but share the same bounded batch implementation.
