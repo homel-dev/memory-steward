@@ -139,7 +139,7 @@ tasks:
               containers:
                 - name: qdrant-init
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["bash","/opt/tooling/init_qdrant.sh","ensure"]
                   env:
                     - {name: QDRANT_URL,        value: "http://qdrant:6333"}
@@ -170,7 +170,7 @@ tasks:
               containers:
                 - name: reset
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["sh","-c","psql -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;' && bash /opt/tooling/init_qdrant.sh delete"]
                   env:
                     - {name: PGHOST,            value: "postgres"}
@@ -215,7 +215,7 @@ tasks:
               containers:
                 - name: migrate
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["bash","/opt/tooling/migrate.sh","up"]
                   env:
                     - {name: PGHOST,     value: "postgres"}
@@ -247,7 +247,7 @@ tasks:
               containers:
                 - name: migstatus
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["bash","/opt/tooling/migrate.sh","status"]
                   env:
                     - {name: PGHOST,     value: "postgres"}
@@ -281,7 +281,7 @@ tasks:
               containers:
                 - name: backup
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["bash","/opt/tooling/backup.sh"]
                   env:
                     - {name: PGHOST,            value: "postgres"}
@@ -323,7 +323,7 @@ tasks:
               containers:
                 - name: restore
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["bash","/opt/tooling/restore.sh"]
                   env:
                     - {name: PGHOST,            value: "postgres"}
@@ -369,7 +369,7 @@ tasks:
               containers:
                 - name: export
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["sh","-c","mkdir -p /backups/exports && python3 /opt/tooling/memory_export.py $ARGS | tee /backups/exports/memory-\$(date +%Y%m%d-%H%M%S).json"]
                   env:
                     - {name: POSTGRES_USER,     value: "homel"}
@@ -408,7 +408,7 @@ tasks:
               containers:
                 - name: fetch
                   image: {{.TOOLING_IMAGE}}
-                  imagePullPolicy: IfNotPresent
+                  imagePullPolicy: Always
                   command: ["sh","-c","cat \$(ls -1t /backups/exports/*.json | head -1)"]
                   volumeMounts: [{name: backups, mountPath: /backups}]
               volumes:
