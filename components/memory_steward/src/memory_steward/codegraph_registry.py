@@ -101,6 +101,27 @@ class IndexWork:
 
 
 @dataclass(frozen=True)
+class ServeWork:
+    registry_id: str
+    worker_generation: int
+    worker_id: str
+    worker_endpoint: str
+    source_bucket: str
+    source_object_key: str
+    source_version_id: str | None
+    project_id: str | None
+    run_id: str | None
+    realm: str | None
+    repository: str | None
+    indexed_revision: str
+    codegraph_version: str
+    index_profile: str
+    state_artifact_bucket: str
+    state_artifact_key: str
+    state_artifact_digest: str
+
+
+@dataclass(frozen=True)
 class IndexSuccess:
     registry_id: str
     worker_generation: int
@@ -383,6 +404,8 @@ class CodeGraphRegistry:
                     state_artifact_schema_version = %s,
                     indexing_finished_at = now(),
                     state = 'activating',
+                    worker_endpoint = NULL,
+                    ready_at = NULL,
                     ready = FALSE,
                     error_detail = NULL,
                     updated_at = now()
@@ -498,3 +521,177 @@ class CodeGraphRegistry:
                     (error_detail[:4000], registry_id),
                 )
             return updated
+
+    def reserve_activating_serve_work(
+        self,
+        *,
+        limit: int,
+        namespace: str,
+        port: int = 8094,
+    ) -> list[ServeWork]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  id::text,
+                  worker_generation + 1,
+                  source_bucket,
+                  source_object_key,
+                  source_version_id,
+                  project_id,
+                  run_id,
+                  realm,
+                  repository,
+                  indexed_revision,
+                  codegraph_version,
+                  index_profile,
+                  state_artifact_bucket,
+                  state_artifact_key,
+                  state_artifact_digest
+                FROM codegraph_registry
+                WHERE ready = FALSE
+                  AND state = 'activating'
+                  AND worker_endpoint IS NULL
+                  AND indexed_revision IS NOT NULL
+                  AND codegraph_version IS NOT NULL
+                  AND index_profile IS NOT NULL
+                  AND state_artifact_bucket IS NOT NULL
+                  AND state_artifact_key IS NOT NULL
+                  AND state_artifact_digest IS NOT NULL
+                ORDER BY indexing_finished_at, updated_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+            work_items: list[ServeWork] = []
+            for row in rows:
+                registry_id = str(row[0])
+                generation = int(row[1])
+                worker_id = f"cg-serve-{registry_id.replace('-', '')[:12]}-g{generation}"
+                worker_endpoint = f"http://{worker_id}.{namespace}.svc.cluster.local:{port}"
+                cur.execute(
+                    """
+                    UPDATE codegraph_registry
+                    SET worker_generation = %s,
+                        worker_id = %s,
+                        worker_endpoint = %s,
+                        error_detail = NULL,
+                        updated_at = now()
+                    WHERE id = %s::uuid
+                      AND state = 'activating'
+                      AND ready = FALSE
+                      AND worker_endpoint IS NULL
+                    """,
+                    (generation, worker_id, worker_endpoint, registry_id),
+                )
+                if cur.rowcount != 1:
+                    continue
+                work_items.append(
+                    ServeWork(
+                        registry_id=registry_id,
+                        worker_generation=generation,
+                        worker_id=worker_id,
+                        worker_endpoint=worker_endpoint,
+                        source_bucket=str(row[2]),
+                        source_object_key=str(row[3]),
+                        source_version_id=row[4],
+                        project_id=row[5],
+                        run_id=row[6],
+                        realm=row[7],
+                        repository=row[8],
+                        indexed_revision=str(row[9]),
+                        codegraph_version=str(row[10]),
+                        index_profile=str(row[11]),
+                        state_artifact_bucket=str(row[12]),
+                        state_artifact_key=str(row[13]),
+                        state_artifact_digest=str(row[14]),
+                    )
+                )
+            return work_items
+
+    def mark_serve_launch_failed(self, work: ServeWork, error_detail: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_registry
+                SET state = 'failed',
+                    ready = FALSE,
+                    error_detail = %s,
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND worker_generation = %s
+                  AND worker_endpoint = %s
+                  AND state = 'activating'
+                """,
+                (
+                    error_detail[:4000],
+                    work.registry_id,
+                    work.worker_generation,
+                    work.worker_endpoint,
+                ),
+            )
+            return cur.rowcount == 1
+
+    def complete_serve_success(
+        self,
+        *,
+        registry_id: str,
+        worker_generation: int,
+        indexed_revision: str,
+        worker_endpoint: str,
+    ) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_registry
+                SET state = 'ready',
+                    ready = TRUE,
+                    ready_at = COALESCE(ready_at, now()),
+                    error_detail = NULL,
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND worker_generation = %s
+                  AND worker_endpoint = %s
+                  AND indexed_revision = %s
+                  AND state IN ('activating', 'ready')
+                """,
+                (
+                    registry_id,
+                    worker_generation,
+                    worker_endpoint,
+                    indexed_revision,
+                ),
+            )
+            return cur.rowcount == 1
+
+    def complete_serve_failure(
+        self,
+        *,
+        registry_id: str,
+        worker_generation: int,
+        worker_endpoint: str,
+        error_detail: str,
+    ) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_registry
+                SET state = 'failed',
+                    ready = FALSE,
+                    error_detail = %s,
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND worker_generation = %s
+                  AND worker_endpoint = %s
+                  AND state = 'activating'
+                """,
+                (
+                    error_detail[:4000],
+                    registry_id,
+                    worker_generation,
+                    worker_endpoint,
+                ),
+            )
+            return cur.rowcount == 1

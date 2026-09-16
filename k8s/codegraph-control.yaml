@@ -154,3 +154,27 @@ spec:
               port: 8093
             initialDelaySeconds: 2
             periodSeconds: 5
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: codegraph-controller-serve
+  namespace: ms
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: codegraph-controller-serve
+  namespace: ms
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: codegraph-controller-serve
+subjects:
+  - kind: ServiceAccount
+    name: codegraph-controller
+    namespace: ms
