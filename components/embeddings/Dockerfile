@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  coreutils \
+  util-linux \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -15,4 +20,4 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BA
 
 EXPOSE 8000
 
-CMD ["python", "-m", "embeddings.server"]
+CMD ["sh", "-c", "exec ionice -c3 nice -n 19 python -m embeddings.server"]
