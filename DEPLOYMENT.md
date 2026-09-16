@@ -36,7 +36,7 @@ task ops:service:wait
 
 ### 4. Workload Lifecycle
 
-Restart stateless application services and the log collector:
+Restart stateless application services, including the CodeGraph listener/controller, and the log collector:
 
 ~~~bash
 task ops:service:restart
@@ -129,6 +129,7 @@ Current manifests include both fixed and floating tags. Do not assume every work
 | ops:service:restart:steward | Restart Steward |
 | ops:service:restart:mcp | Restart MCP |
 | ops:service:restart:list | Restart LIST |
+| ops:service:restart:codegraph | Restart CodeGraph listener/controller |
 | ops:service:restart:embeddings | Restart embeddings |
 | ops:service:restart:webui | Restart Open WebUI |
 | ops:service:restart:vector | Restart Vector |
@@ -167,10 +168,11 @@ When Reference Memory is in scope, add a controlled list/search/get test. When A
 2. Postgres/Qdrant persistence/readiness;
 3. embeddings;
 4. Steward and Router;
-5. MCP;
-6. optional LIST/Open WebUI/Vector;
-7. request-level telemetry and logs;
-8. only then consider destructive reset/restore.
+5. CodeGraph listener/controller when CodeGraph discovery is in scope;
+6. MCP;
+7. optional LIST/Open WebUI/Vector;
+8. request-level telemetry and logs;
+9. only then consider destructive reset/restore.
 
 ## 11. Current Image Caveat
 

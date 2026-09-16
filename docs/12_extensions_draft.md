@@ -1190,36 +1190,30 @@ The CodeGraph process itself SHOULD remain local to the worker rather than requi
 
 The worker adapter MAY expose a bounded internal transport for Memory Steward routing.
 
-Run-scoped graph state SHOULD initially use ephemeral storage.
+Worker-local workspace and active CodeGraph files MAY use ephemeral storage while indexing or serving. A completed reusable CodeGraph state MUST be persisted as a versioned artifact in object storage before the registry can later activate that graph from durable state.
 
 The graph MUST remain reproducible from the immutable workspace snapshot and recorded producer configuration.
 
 ### 9.4 CodeGraph Registry
 
-Memory Steward requires a runtime registry that maps graph identity to current worker state.
+**Implementation status:** PARTIAL. The PostgreSQL registry, MinIO event listener, discovery/index controller, index worker, and durable CodeGraph state artifact/restore path are implemented. Serve/reconcile workers and agent-facing CodeGraph routing remain proposal work.
 
-A registry record SHOULD include:
+Memory Steward uses PostgreSQL as the durable CodeGraph discovery and lifecycle registry.
 
-- graph identity;
-- requested revision;
-- indexed revision;
-- worker identity;
-- worker generation;
-- backend transport/address metadata;
-- state;
-- created time;
-- updated time;
-- last successful readiness time;
-- failure detail when applicable.
+The externally relevant readiness contract is intentionally small:
 
-Suggested states include:
+- `ready` is the only capability-gating field;
+- `state` explains the current operational reason/status.
 
-- `STARTING`;
-- `INDEXING`;
-- `READY`;
-- `DEGRADED`;
-- `FAILED`;
-- `RELEASING`.
+A discovered MinIO object starts with `ready=false` and `state=discovered`. The controller atomically claims discovery rows with `FOR UPDATE SKIP LOCKED` and moves them to `state=queued`. Later worker phases may use `indexing`, `storing`, `activating`, `ready`, `reindexing`, `failed`, or `unindexable`. Consumers MUST gate on `ready`, not on individual `state` values.
+
+The registry also records source object identity and MinIO metadata, normalized project/run/realm/repository metadata when supplied, indexed Git revision when later resolved by a worker, CodeGraph producer/profile information, persisted state-artifact identity, worker binding, timestamps, and failure detail.
+
+MinIO object-created delivery is handled by the dedicated `codegraph-listener`. It performs an idempotent discovery insert and PostgreSQL notification only; it does not download or inspect repository content. The `codegraph-controller` performs startup/fallback scans and consumes PostgreSQL notifications to claim pending discovery work.
+
+For claimed work, the controller creates an isolated Kubernetes index Job. The worker downloads the exact MinIO source object, requires a `.git` directory, resolves the full Git `HEAD` commit SHA, runs the pinned CodeGraph producer, and uploads a versioned state artifact back beside the source object. The artifact contains the complete worker-local `.codegraph` state plus a manifest recording repository identity, indexed revision, producer version, index profile, canonical workspace path, and base revision when incremental reuse was used.
+
+Incremental reuse is allowed only when repository identity, producer version, index profile, canonical workspace path, Git ancestry, artifact digest, and artifact schema are compatible. If the prior revision is unavailable, is not an ancestor, or the Git delta contains deletions or renames, the worker discards restored state and performs a full rebuild. A completed index remains `ready=false` with `state=activating` until a later serve-worker slice makes that artifact queryable end-to-end through Memory Steward MCP.
 
 Ephemeral backend addresses MUST NOT become long-lived external agent contract.
 

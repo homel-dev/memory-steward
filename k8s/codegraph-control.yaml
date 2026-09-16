@@ -1,0 +1,156 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: codegraph-listener
+  namespace: ms
+spec:
+  selector:
+    app: codegraph-listener
+  ports:
+    - port: 8092
+      targetPort: 8092
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: codegraph-controller
+  namespace: ms
+spec:
+  selector:
+    app: codegraph-controller
+  ports:
+    - port: 8093
+      targetPort: 8093
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: codegraph-controller
+  namespace: ms
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: codegraph-worker
+  namespace: ms
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: codegraph-controller
+  namespace: ms
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: codegraph-controller
+  namespace: ms
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: codegraph-controller
+subjects:
+  - kind: ServiceAccount
+    name: codegraph-controller
+    namespace: ms
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codegraph-listener
+  namespace: ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: codegraph-listener
+  template:
+    metadata:
+      labels:
+        app: codegraph-listener
+    spec:
+      containers:
+        - name: listener
+          image: ghcr.io/homel-dev/memory-steward/memory-steward:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "memory_steward.codegraph_listener"]
+          ports:
+            - containerPort: 8092
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+            - secretRef:
+                name: homel-postgres
+          env:
+            - name: CODEGRAPH_LISTENER_PORT
+              value: "8092"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8092
+            initialDelaySeconds: 2
+            periodSeconds: 5
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codegraph-controller
+  namespace: ms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: codegraph-controller
+  template:
+    metadata:
+      labels:
+        app: codegraph-controller
+    spec:
+      serviceAccountName: codegraph-controller
+      containers:
+        - name: controller
+          image: ghcr.io/homel-dev/memory-steward/memory-steward:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "memory_steward.codegraph_controller"]
+          ports:
+            - containerPort: 8093
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+            - secretRef:
+                name: homel-postgres
+            - secretRef:
+                name: homel-codegraph
+                optional: true
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CODEGRAPH_CONTROLLER_PORT
+              value: "8093"
+            - name: CODEGRAPH_CONTROLLER_URL
+              value: "http://codegraph-controller:8093"
+            - name: CODEGRAPH_CONTROLLER_BATCH_SIZE
+              value: "16"
+            - name: CODEGRAPH_CONTROLLER_POLL_SECONDS
+              value: "5"
+            - name: CODEGRAPH_WORKER_SECRET_NAME
+              value: "homel-codegraph"
+            - name: CODEGRAPH_INDEX_PROFILE
+              value: "graph-only"
+            - name: CODEGRAPH_VERSION
+              value: "0.20.1"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8093
+            initialDelaySeconds: 2
+            periodSeconds: 5

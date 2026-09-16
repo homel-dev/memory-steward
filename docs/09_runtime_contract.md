@@ -45,6 +45,8 @@ The Kubernetes namespace is `ms`.
 | `memory-steward` | Deployment | 8090 |
 | `memory-steward-mcp` | Deployment | 8081 |
 | `memory-steward-list` | Deployment | 8001 |
+| `codegraph-listener` | Deployment | 8092 |
+| `codegraph-controller` | Deployment | 8093 |
 | `open-webui` | Deployment | 8080 |
 | `vector-agent` | DaemonSet | n/a |
 
@@ -170,6 +172,8 @@ Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns s
 | memory-steward | Admission/outcome/feedback service | 8090 |
 | memory-steward-mcp | FastMCP internal control/adapter service | 8081 /mcp |
 | memory-steward-list | Optional speech transcription | 8001 |
+| codegraph-listener | MinIO CodeGraph object-event ingress | 8092 /events/minio |
+| codegraph-controller | PostgreSQL-backed CodeGraph lifecycle/index controller | 8093 /healthz + worker callback |
 | embeddings | Dense embedding service | 8000 |
 | Postgres | Structured state/telemetry | 5432 |
 | Qdrant | Vector index | 6333 |
@@ -206,6 +210,18 @@ Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns s
 | Steward | QDRANT_COLLECTION | required | Qdrant collection |
 | Steward | POSTGRES_* | required | Structured persistence |
 | Steward | EMBEDDINGS_SERVICE_HOST / PORT | required | Embedding service |
+| CodeGraph listener | POSTGRES_* | required | CodeGraph discovery registry persistence |
+| CodeGraph listener | CODEGRAPH_MINIO_BUCKETS / CODEGRAPH_MINIO_PREFIXES | empty | Optional event filters |
+| CodeGraph listener | CODEGRAPH_MINIO_WEBHOOK_TOKEN | empty | Optional bearer token for MinIO webhook delivery |
+| CodeGraph controller | POSTGRES_* | required | CodeGraph registry queue and LISTEN/NOTIFY |
+| CodeGraph controller | CODEGRAPH_CONTROLLER_BATCH_SIZE | 16 | Maximum discovery rows claimed per drain |
+| CodeGraph controller | CODEGRAPH_CONTROLLER_POLL_SECONDS | 5 | Fallback registry scan interval |
+| CodeGraph controller | CODEGRAPH_VERSION | 0.20.1 | Pinned CodeGraph producer version expected by index workers |
+| CodeGraph controller | CODEGRAPH_INDEX_PROFILE | graph-only | Initial structural indexing profile |
+| CodeGraph controller | CODEGRAPH_WORKER_IMAGE | memory-steward image | Image used for isolated index Jobs |
+| CodeGraph controller | CODEGRAPH_WORKER_SECRET_NAME | homel-codegraph | Optional Secret injected into workers |
+| CodeGraph worker | MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY | required for indexing | MinIO/S3-compatible object access |
+| CodeGraph worker | CODEGRAPH_WORKER_CALLBACK_TOKEN | optional | Bearer token shared with controller callback endpoint |
 | LIST | DEVICE | cpu in manifest | Whisper device |
 | LIST | COMPUTE_TYPE | int8 in manifest | Whisper compute type |
 | LIST | WHISPER_MODEL_SIZE | component default | Whisper model size |
