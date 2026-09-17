@@ -84,7 +84,11 @@ class _GitLabAdapter:
         self.conn = conn
 
     def _headers(self) -> dict:
-        return {"PRIVATE-TOKEN": self.conn["token"], "Content-Type": "application/json"}
+        headers = {"Content-Type": "application/json"}
+        token = (self.conn.get("token") or "").strip()
+        if token:
+            headers["PRIVATE-TOKEN"] = token
+        return headers
 
     def _api(self, path: str) -> str:
         return f"{self.conn['base_url']}/api/v4{path}"
@@ -93,14 +97,25 @@ class _GitLabAdapter:
         return requests.utils.quote(project, safe="")
 
     def test(self) -> dict:
-        r = requests.get(self._api("/user"), headers=self._headers(), timeout=10)
+        token = (self.conn.get("token") or "").strip()
+        if token:
+            r = requests.get(self._api("/user"), headers=self._headers(), timeout=10)
+            r.raise_for_status()
+            u = r.json()
+            return {"username": u.get("username"), "name": u.get("name")}
+
+        r = requests.get(
+            self._api("/projects"),
+            headers=self._headers(),
+            params={"simple": True, "per_page": 1},
+            timeout=10,
+        )
         r.raise_for_status()
-        u = r.json()
-        return {"username": u.get("username"), "name": u.get("name")}
+        return {"username": "anonymous", "name": "public access"}
 
     def list_repos(self, search: str, owned: bool) -> list[dict]:
         params = {"per_page": 50, "order_by": "last_activity_at"}
-        if owned:
+        if owned and (self.conn.get("token") or "").strip():
             params["owned"] = "true"
         if search:
             params["search"] = search
@@ -471,7 +486,7 @@ def register_git_tools(mcp: FastMCP, ingest_text_fn):
         name: str,
         provider: str,
         base_url: str,
-        token: str,
+        token: str = "",
         access_level: str = "read",
     ) -> str:
         """[Connections] Register a named repository connection.
@@ -482,7 +497,8 @@ def register_git_tools(mcp: FastMCP, ingest_text_fn):
           base_url:     Instance URL, e.g. 'https://gitlab.yourdomain.com'
                         For GitHub Cloud use 'https://api.github.com'
                         For Bitbucket Cloud use 'https://bitbucket.org'
-          token:        Auth token. GitLab: Personal Access Token.
+          token:        Optional for anonymous read-only access to public GitLab repositories.
+                        GitLab: Personal Access Token for authenticated access.
                         GitHub: Personal Access Token or fine-grained token.
                         Bitbucket: 'username:app_password' or Bearer token.
           access_level: 'read' or 'read-write'
@@ -496,6 +512,12 @@ def register_git_tools(mcp: FastMCP, ingest_text_fn):
             return f"Invalid provider '{provider}'. Must be one of: {VALID_PROVIDERS}"
         if access_level not in ("read", "read-write"):
             return f"Invalid access_level '{access_level}'. Must be 'read' or 'read-write'."
+
+        token = token.strip()
+        if not token and provider != "gitlab":
+            return f"token is required for provider '{provider}'."
+        if not token and access_level != "read":
+            return "Anonymous GitLab connections require access_level='read'."
 
         try:
             with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
