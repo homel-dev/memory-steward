@@ -1,14 +1,7 @@
-import importlib
 import json
-import sys
-import types
 from unittest.mock import MagicMock, patch
 
-fastmcp = types.ModuleType("fastmcp")
-fastmcp.FastMCP = object
-sys.modules.setdefault("fastmcp", fastmcp)
-
-register_agent_tools = importlib.import_module("memory_steward_mcp.agent_plane").register_agent_tools
+from memory_steward_mcp.agent_plane import register_agent_tools
 
 
 class FakeMCP:

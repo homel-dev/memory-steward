@@ -20,15 +20,15 @@ from datetime import datetime
 from typing import Any, Sequence
 
 import anyio
+import httpx
+import mcp.types as mt
+import psycopg
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.server.providers import Provider
 from fastmcp.tools.base import Tool, ToolResult
-import httpx
-import mcp.types as mt
-import psycopg
 from psycopg.rows import dict_row
 from pydantic import BaseModel, Field, ValidationError
 from starlette.requests import Request
