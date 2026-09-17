@@ -49,7 +49,7 @@ The Kubernetes namespace is `ms`.
 | `codegraph-listener` | Deployment | 8092 |
 | `codegraph-controller` | Deployment | 8093 |
 | `open-webui` | Deployment | 8080 |
-| `vector-agent` | DaemonSet | n/a |
+| `alloy` | DaemonSet | 4317 / 4318 |
 
 OCO is external to this namespace's application workloads; Memory Steward publishes OCO consumer ConfigMaps/RBAC.
 
@@ -159,7 +159,7 @@ Current manifests contain a mix of fixed and floating image tags. This document 
 
 ## 8. Observability
 
-Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns shared Grafana presentation. Vector is the log collector. Removing OCO affects visualization, not canonical Memory Steward storage.
+Memory Steward owns telemetry semantics and OCO provisioning content. Namespace-local Alloy collects pod logs, scrapes supported Prometheus endpoints, accepts local OTLP, and forwards those signals to the OCO Alloy gateway. OCO owns the shared telemetry backend and Grafana presentation. Removing OCO affects observability transport/presentation, not canonical Memory Steward Postgres/Qdrant state.
 
 [Back to top](#navigation)
 
@@ -180,7 +180,7 @@ Memory Steward owns telemetry semantics and OCO provisioning content. OCO owns s
 | Postgres | Structured state/telemetry | 5432 |
 | Qdrant | Vector index | 6333 |
 | Open WebUI | Optional frontend | 8080 service-local |
-| Vector | Log collection | agent/collector role |
+| Alloy | Namespace-local logs/metrics/OTLP collection and OCO forwarding | 4317 / 4318 |
 
 ## 10. Environment and Runtime Configuration
 
@@ -307,7 +307,7 @@ OPEN_WEBUI_URL: http://open-webui:8080
 | ops:service:restart:list | Restart LIST |
 | ops:service:restart:embeddings | Restart embeddings |
 | ops:service:restart:webui | Restart Open WebUI |
-| ops:service:restart:vector | Restart Vector |
+| ops:service:restart:alloy | Restart namespace Alloy collector |
 | ops:storage:restart:postgres | Prompted Postgres restart |
 | ops:storage:restart:qdrant | Prompted Qdrant restart |
 | ops:mcp:tools | List live MCP tools |
@@ -335,7 +335,6 @@ OPEN_WEBUI_URL: http://open-webui:8080
 | Postgres | PVC/stateful deployment according to manifests | Contains canonical structured memory/config/telemetry; backup before destructive reset |
 | Qdrant | Persistent vector store according to manifests | Contains semantic dynamic/reference index; consistency with Postgres metadata matters |
 | Whisper/HF model cache | `hf-cache` PVC | Avoids multi-GB model re-download for LIST |
-| Vector log volume | `vector-logs` PVC where configured | Shared log access for diagnostics |
 | Backups | backup PVC / repository backup workflow | Used by backup/restore tasks |
 
 ## 14. Deployment Ordering
@@ -350,7 +349,7 @@ namespace + secrets/config
   -> memory-steward
   -> memory-router
   -> memory-steward-mcp
-  -> optional LIST / Open WebUI / Vector / OCO consumer resources
+  -> optional LIST / Open WebUI / Alloy / OCO consumer resources
 ~~~
 
 The repository Tasks encode most of this lifecycle. Operators should prefer those Tasks over ad hoc host commands because the Taskfile captures namespace/resource assumptions.

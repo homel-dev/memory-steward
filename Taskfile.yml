@@ -95,7 +95,9 @@ tasks:
       - kubectl apply -f k8s/
       - kubectl apply -f k8s/tooling/
       - kubectl apply -f k8s/backup/
-      - kubectl apply -f k8s/vector/
+      - kubectl delete daemonset/vector-agent configmap/vector-config serviceaccount/vector-agent -n {{.NAMESPACE}} --ignore-not-found
+      - kubectl delete clusterrole/vector-agent clusterrolebinding/vector-agent --ignore-not-found
+      - kubectl apply -f k8s/alloy/
       - kubectl delete -n {{.NAMESPACE}} deployment/grafana service/grafana serviceaccount/grafana role/grafana-read-configmaps rolebinding/grafana-read-configmaps --ignore-not-found
       - kubectl apply -k k8s/oco-consumer/
 
@@ -105,7 +107,7 @@ tasks:
       - task: ops:service:wait
 
   k8s:restart:
-    desc: "Restart all stateless application services and Vector"
+    desc: "Restart all stateless application services and Alloy"
     cmds:
       - task: ops:service:restart
 

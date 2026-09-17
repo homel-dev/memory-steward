@@ -17,7 +17,6 @@ from memory_steward_mcp.config import (
     APP_VERSION,
     EMBEDDINGS_URL,
     HYSTERESIS_WINDOW,
-    LOG_DIR,
     MAX_CONTEXT_TOKENS,
     POSTGRES_DSN,
     QDRANT_COLLECTION,
@@ -456,26 +455,6 @@ def register_diagnostics_tools(mcp: FastMCP, qdrant):
             lines.append(f"{i}. [{mem_type}] score={score}  `{content[:120]}`")
 
         return "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # LOGS
-    # ------------------------------------------------------------------
-
-    @mcp.tool(name="diag_logs")
-    def logs_read(service: str, lines: int = 200) -> str:
-        """[Diagnostics] Read bounded tail of container logs for a service.
-        Valid services: memory-router, memory-steward, memory-steward-mcp,
-        memory-steward-list, embeddings, qdrant, postgres, vllm-steward."""
-        max_lines = min(lines, 1000)
-        log_path = os.path.join(LOG_DIR, f"{service}.log")
-        try:
-            with open(log_path, "r") as f:
-                tail = f.readlines()[-max_lines:]
-                return "".join(tail)
-        except FileNotFoundError:
-            return f"Log file not found: {log_path}"
-        except Exception as e:
-            return f"Log read failed: {e}"
 
     # ------------------------------------------------------------------
     # RUNTIME CONTRACT

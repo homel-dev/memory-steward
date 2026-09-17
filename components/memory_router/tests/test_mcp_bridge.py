@@ -237,7 +237,6 @@ def test_aliases_are_strings_and_nonempty():
 
 def test_alias_examples_resolve():
     assert b.ALIASES["get_project_memory"] == "dyn_inspect"
-    assert b.ALIASES["diagnostics.logs.read"] == "diag_logs"
     assert b.ALIASES["set_token_budget"] == "config_set_budget"
 
 

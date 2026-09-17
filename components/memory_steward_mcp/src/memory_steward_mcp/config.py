@@ -22,7 +22,6 @@ STEWARD_URL         = _env("STEWARD_URL", "http://memory-steward:8090").rstrip("
 
 # Diagnostics Plane
 POSTGRES_DSN        = _env("POSTGRES_DSN", required=True)
-LOG_DIR             = _env("LOG_DIR", "/var/log/memory_steward_logs")
 
 # Stability Plane
 STATIC_MEMORY_REFRESH_SECONDS = int(_env("STATIC_MEMORY_REFRESH_SECONDS", "1800"))

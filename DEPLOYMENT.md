@@ -134,7 +134,7 @@ Current manifests include both fixed and floating tags. Do not assume every work
 | ops:service:restart:codegraph | Restart CodeGraph listener/controller |
 | ops:service:restart:embeddings | Restart embeddings |
 | ops:service:restart:webui | Restart Open WebUI |
-| ops:service:restart:vector | Restart Vector |
+| ops:service:restart:alloy | Restart namespace Alloy collector |
 | ops:storage:restart:postgres | Prompted Postgres restart |
 | ops:storage:restart:qdrant | Prompted Qdrant restart |
 | ops:mcp:tools | List live MCP tools |
@@ -176,7 +176,7 @@ When Reference Memory is in scope, add a controlled list/search/get test. When A
 4. Steward and Router;
 5. CodeGraph listener/controller when CodeGraph discovery is in scope;
 6. MCP;
-7. optional LIST/Open WebUI/Vector;
+7. optional LIST/Open WebUI/Alloy;
 8. request-level telemetry and logs;
 9. only then consider destructive reset/restore.
 

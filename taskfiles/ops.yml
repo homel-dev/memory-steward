@@ -23,7 +23,7 @@ tasks:
       - kubectl rollout status deployment/codegraph-listener -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/codegraph-controller -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/open-webui -n {{.NAMESPACE}} --timeout=300s
-      - kubectl rollout status daemonset/vector-agent -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout status daemonset/alloy -n {{.NAMESPACE}} --timeout=180s
 
   service:health:
     desc: 'Check every HTTP runtime dependency plus Postgres readiness'
@@ -66,7 +66,7 @@ tasks:
     desc: 'Restart all stateless Memory Steward application services'
     cmds:
       - kubectl rollout restart deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui -n {{.NAMESPACE}}
-      - kubectl rollout restart daemonset/vector-agent -n {{.NAMESPACE}}
+      - kubectl rollout restart daemonset/alloy -n {{.NAMESPACE}}
       - task: service:wait
 
   service:restart:router:
@@ -118,11 +118,11 @@ tasks:
       - kubectl rollout restart deployment/open-webui -n {{.NAMESPACE}}
       - kubectl rollout status deployment/open-webui -n {{.NAMESPACE}} --timeout=300s
 
-  service:restart:vector:
-    desc: 'Restart Vector log collector'
+  service:restart:alloy:
+    desc: 'Restart namespace Alloy telemetry collector'
     cmds:
-      - kubectl rollout restart daemonset/vector-agent -n {{.NAMESPACE}}
-      - kubectl rollout status daemonset/vector-agent -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout restart daemonset/alloy -n {{.NAMESPACE}}
+      - kubectl rollout status daemonset/alloy -n {{.NAMESPACE}} --timeout=180s
 
   storage:restart:postgres:
     desc: 'Restart Postgres StatefulSet (stateful; explicit task)'
@@ -163,10 +163,10 @@ tasks:
     cmds:
       - kubectl logs -n {{.NAMESPACE}} deployment/open-webui -f --tail=200
 
-  logs:vector:
-    desc: 'Tail Vector log collector logs'
+  logs:alloy:
+    desc: 'Tail namespace Alloy telemetry collector logs'
     cmds:
-      - kubectl logs -n {{.NAMESPACE}} daemonset/vector-agent -f --tail=200
+      - kubectl logs -n {{.NAMESPACE}} daemonset/alloy -f --tail=200
 
   logs:postgres:
     desc: 'Tail Postgres logs'

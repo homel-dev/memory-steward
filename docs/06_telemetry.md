@@ -84,7 +84,7 @@ Telemetry SHOULD store bounded operational metadata and error summaries, not raw
 - MCP diagnostics tools provide bounded health/metrics/log/retrieval inspection.
 - Memory Steward publishes Grafana datasource/dashboard ConfigMaps for OCO.
 - OCO owns the shared Grafana presentation runtime; Memory Steward does not deploy its own Grafana workload.
-- Vector collects cluster logs into the configured log sink.
+- Namespace-local Alloy collects Memory Steward pod logs, scrapes supported runtime metrics, and forwards telemetry to the shared OCO Alloy gateway.
 
 [Back to top](#navigation)
 
@@ -169,7 +169,6 @@ Structured agent outcomes additionally record artifact counts and idempotent rep
 | diag_qdrant_stats | Inspect Qdrant collection statistics |
 | dyn_inspect | Inspect dynamic-memory rows |
 | dyn_simulate_retrieval | Simulate dynamic retrieval for troubleshooting |
-| diag_logs | Read shared collected logs |
 
 `diag_explain` and `diag_explain_last` are designed for request-level reasoning about what the system did. `dyn_simulate_retrieval` is a troubleshooting aid; it does not become the Router's production retrieval path.
 
@@ -177,7 +176,7 @@ Structured agent outcomes additionally record artifact counts and idempotent rep
 
 Memory Steward ships OCO consumer resources for Grafana datasource/dashboard provisioning. The presentation plane is not canonical telemetry storage. Deleting or restarting a Grafana presentation component must not be treated as deleting the underlying Postgres/Qdrant state.
 
-Vector is used for collected logs. The MCP diagnostics plane can read from the shared log volume where configured.
+Alloy is the namespace-local telemetry collector. It forwards pod logs, supported Prometheus metrics, and OTLP signals to the OCO Alloy gateway; no project-local log PVC is part of the observability contract.
 
 ## 13. Data-Minimization Rules
 

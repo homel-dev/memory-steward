@@ -40,7 +40,6 @@ FastMCP internal control and adapter surface. It exposes content, stability/conf
 | diagnostics | diag_qdrant_stats | Read-only | Inspect Qdrant collection statistics |
 | diagnostics | dyn_inspect | Read-only | Inspect dynamic-memory rows |
 | diagnostics | dyn_simulate_retrieval | Read-only | Simulate dynamic retrieval for troubleshooting |
-| diagnostics | diag_logs | Read-only | Read shared collected logs |
 | git | repo_add | Mutating | Register repository metadata/connection |
 | git | repo_list | Read-only | List registered repositories |
 | git | repo_remove | Mutating | Remove repository registration |

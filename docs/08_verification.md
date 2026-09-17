@@ -98,7 +98,7 @@ task verify:health
 task verify:amp
 ~~~
 
-The wait/status surface covers Postgres, Qdrant, embeddings, Router, Steward, MCP, the reference-ingest worker, LIST, CodeGraph, Open WebUI, and Vector. `verify:health` performs HTTP readiness checks from the Router pod using Python `requests` (already present in the Router package) and uses `pg_isready` for Postgres; it does not assume `curl` exists in the Router image.
+The wait/status surface covers Postgres, Qdrant, embeddings, Router, Steward, MCP, the reference-ingest worker, LIST, CodeGraph, Open WebUI, and Alloy. `verify:health` performs HTTP readiness checks from the Router pod using Python `requests` (already present in the Router package) and uses `pg_isready` for Postgres; it does not assume `curl` exists in the Router image.
 
 [Back to top](#navigation)
 
@@ -285,7 +285,7 @@ A change is complete only when executable checks validate the affected behavior 
 | ops:service:restart:list | Restart LIST |
 | ops:service:restart:embeddings | Restart embeddings |
 | ops:service:restart:webui | Restart Open WebUI |
-| ops:service:restart:vector | Restart Vector |
+| ops:service:restart:alloy | Restart namespace Alloy collector |
 | ops:storage:restart:postgres | Prompted Postgres restart |
 | ops:storage:restart:qdrant | Prompted Qdrant restart |
 | ops:mcp:tools | List live MCP tools |

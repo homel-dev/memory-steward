@@ -68,8 +68,6 @@ ALIASES: Dict[str, str] = {
     "explain_last_decision": "diag_explain_last",
     "get_metrics": "diag_metrics",
     "get_qdrant_stats": "diag_qdrant_stats",
-    "logs_read": "diag_logs",
-    "diagnostics.logs.read": "diag_logs",
     # Dynamic memory (was named diagnostically)
     "get_project_memory": "dyn_inspect",
     "simulate_retrieval": "dyn_simulate_retrieval",

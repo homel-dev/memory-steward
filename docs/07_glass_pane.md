@@ -183,7 +183,6 @@ Persisting a compatibility key does not imply active runtime behavior.
 | `diag_qdrant_stats` | Read-only | Show Qdrant collection status and counts by memory type |
 | `dyn_inspect` | Read-only | Inspect dynamic-memory rows for a project |
 | `dyn_simulate_retrieval` | Read-only | Run a diagnostic dense Qdrant lookup for a project/query |
-| `diag_logs` | Read-only | Read a bounded tail from the configured log directory |
 
 `dyn_simulate_retrieval` is a diagnostic candidate lookup. It is not a bit-for-bit reproduction of the Router's complete retrieval, MMR, and token-budget pipeline.
 

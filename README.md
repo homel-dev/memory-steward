@@ -20,8 +20,8 @@ Memory Steward is a self-hosted memory control plane for LLM and agent workloads
 | Postgres | Canonical structured state, runtime configuration, telemetry, ingestion records, agent artifacts |
 | Qdrant | Semantic retrieval index for dynamic and canonical reference memory |
 | Open WebUI | Optional chat/operator frontend; `/glap` is bridged by Memory Router to the MCP server |
-| Vector | Cluster log collection |
-| OCO | Shared Grafana presentation plane; Memory Steward publishes datasource/dashboard ConfigMaps |
+| Alloy | Namespace-local telemetry collector; forwards logs, metrics, and OTLP signals to OCO Alloy |
+| OCO | Shared telemetry gateway/backend and Grafana presentation plane; Memory Steward publishes datasource/dashboard ConfigMaps |
 
 The code is the runtime authority. Documentation describes the behavior present in the current tree; proposals that are not implemented are explicitly marked as such.
 
