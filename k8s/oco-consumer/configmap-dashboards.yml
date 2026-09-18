@@ -1117,7 +1117,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -2159,7 +2159,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -3152,7 +3152,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -4346,7 +4346,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -5585,7 +5585,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -6656,7 +6656,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -7536,7 +7536,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [
@@ -8261,7 +8261,7 @@ data:
       "templating": {
         "list": [
           {
-            "allValue": "__all",
+            "allValue": null,
             "current": {
               "selected": true,
               "text": [

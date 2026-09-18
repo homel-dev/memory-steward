@@ -86,6 +86,7 @@ class TelemetryWriter:
         request_id: str,
         project_id: str,
         origin: Optional[str] = None,
+        operation: str = "chat",
         origin_hash: Optional[str] = None,
         model_requested: Optional[str] = None,
         decided_mode: Optional[str] = None,
@@ -102,6 +103,7 @@ class TelemetryWriter:
                       request_id,
                       project_id,
                       t_begin,
+                      operation,
                       origin,
                       origin_hash,
                       model_requested,
@@ -110,13 +112,14 @@ class TelemetryWriter:
                       static_tokens_est,
                       dynamic_tokens_est
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (request_id) DO NOTHING
                     """,
                     (
                         request_id,
                         project_id,
                         t_begin,
+                        operation,
                         origin,
                         origin_hash,
                         model_requested,

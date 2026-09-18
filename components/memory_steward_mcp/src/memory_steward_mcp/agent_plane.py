@@ -5,17 +5,76 @@ Router; outcome admission and feedback remain owned by Memory Steward.
 """
 
 import json
+import logging
 from typing import Any, Optional
 
 import requests
 from fastmcp import FastMCP
+from fastmcp.server.context import request_ctx
 
 from memory_steward_mcp.config import MEMORY_ROUTER_URL, STEWARD_URL
+from memory_steward_mcp.metrics import observe as observe_tool, started as metric_started
+
+log = logging.getLogger("memory-steward-mcp.agent")
 
 
 def _json_response(response: requests.Response) -> str:
     response.raise_for_status()
     return json.dumps(response.json(), ensure_ascii=False, indent=2)
+
+
+def _request_metadata() -> dict[str, str]:
+    try:
+        context = request_ctx.get()
+    except (LookupError, RuntimeError):
+        return {}
+    request = getattr(context, "request", None)
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return {}
+    names = {
+        "x-request-id": "transport_request_id",
+        "x-run-id": "run_id",
+        "x-objective-id": "objective_id",
+        "x-agent-role": "agent_role",
+    }
+    return {field: value for header, field in names.items() if (value := headers.get(header))}
+
+
+def _backend_request_id(result: str) -> str | None:
+    try:
+        payload = json.loads(result)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("context_request_id") or payload.get("request_id")
+    return value if isinstance(value, str) else None
+
+
+def _finish_tool_log(
+    *,
+    tool: str,
+    project_id: str,
+    outcome: str,
+    started_at: float,
+    query: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    duration_ms = observe_tool(tool, outcome, started_at)
+    event: dict[str, Any] = {
+        "event": "memory_steward.mcp_tool",
+        "tool": tool,
+        "project_id": project_id,
+        "outcome": outcome,
+        "duration_ms": duration_ms,
+    }
+    if query is not None:
+        event["query"] = query[:512]
+    event.update(_request_metadata())
+    if extra:
+        event.update(extra)
+    log.info("%s", json.dumps(event, ensure_ascii=False, sort_keys=True))
 
 
 def register_agent_tools(mcp: FastMCP) -> None:
@@ -37,13 +96,33 @@ def register_agent_tools(mcp: FastMCP) -> None:
             payload["artifact_selectors"] = artifact_selectors
         if reference_filters is not None:
             payload["reference_filters"] = reference_filters
-        response = requests.post(
-            f"{MEMORY_ROUTER_URL}/v1/context/retrieve",
-            headers={"X-Project-ID": project_id},
-            json=payload,
-            timeout=60,
+        started_at = metric_started()
+        try:
+            response = requests.post(
+                f"{MEMORY_ROUTER_URL}/v1/context/retrieve",
+                headers={"X-Project-ID": project_id},
+                json=payload,
+                timeout=60,
+            )
+            result = _json_response(response)
+        except Exception:
+            _finish_tool_log(
+                tool="memory.retrieve_context",
+                project_id=project_id,
+                outcome="error",
+                started_at=started_at,
+                query=query,
+            )
+            raise
+        _finish_tool_log(
+            tool="memory.retrieve_context",
+            project_id=project_id,
+            outcome="ok",
+            started_at=started_at,
+            query=query,
+            extra={"reference_filters": reference_filters or {}, "backend_request_id": _backend_request_id(result)},
         )
-        return _json_response(response)
+        return result
 
     @mcp.tool(name="memory.reference.search")
     def reference_search(
@@ -56,23 +135,61 @@ def register_agent_tools(mcp: FastMCP) -> None:
         payload: dict[str, Any] = {"query": query, "limit": limit}
         if reference_filters is not None:
             payload["reference_filters"] = reference_filters
-        response = requests.post(
-            f"{MEMORY_ROUTER_URL}/v1/reference/search",
-            headers={"X-Project-ID": project_id},
-            json=payload,
-            timeout=60,
+        started_at = metric_started()
+        try:
+            response = requests.post(
+                f"{MEMORY_ROUTER_URL}/v1/reference/search",
+                headers={"X-Project-ID": project_id},
+                json=payload,
+                timeout=60,
+            )
+            result = _json_response(response)
+        except Exception:
+            _finish_tool_log(
+                tool="memory.reference.search",
+                project_id=project_id,
+                outcome="error",
+                started_at=started_at,
+                query=query,
+            )
+            raise
+        _finish_tool_log(
+            tool="memory.reference.search",
+            project_id=project_id,
+            outcome="ok",
+            started_at=started_at,
+            query=query,
+            extra={"reference_filters": reference_filters or {}, "limit": limit, "backend_request_id": _backend_request_id(result)},
         )
-        return _json_response(response)
+        return result
 
     @mcp.tool(name="memory.reference.get")
     def reference_get(project_id: str, chunk_id: str) -> str:
         """Fetch one full Reference Memory chunk by stable chunk id."""
-        response = requests.get(
-            f"{MEMORY_ROUTER_URL}/v1/reference/{chunk_id}",
-            headers={"X-Project-ID": project_id},
-            timeout=30,
+        started_at = metric_started()
+        try:
+            response = requests.get(
+                f"{MEMORY_ROUTER_URL}/v1/reference/{chunk_id}",
+                headers={"X-Project-ID": project_id},
+                timeout=30,
+            )
+            result = _json_response(response)
+        except Exception:
+            _finish_tool_log(
+                tool="memory.reference.get",
+                project_id=project_id,
+                outcome="error",
+                started_at=started_at,
+            )
+            raise
+        _finish_tool_log(
+            tool="memory.reference.get",
+            project_id=project_id,
+            outcome="ok",
+            started_at=started_at,
+            extra={"chunk_id": chunk_id, "backend_request_id": _backend_request_id(result)},
         )
-        return _json_response(response)
+        return result
 
     @mcp.tool(name="memory.submit_agent_outcome")
     def submit_agent_outcome(
@@ -110,12 +227,30 @@ def register_agent_tools(mcp: FastMCP) -> None:
             "scope": scope,
             "admit_knowledge": admit_knowledge,
         }
-        response = requests.post(
-            f"{STEWARD_URL}/v1/agent/outcomes",
-            json=payload,
-            timeout=180,
+        started_at = metric_started()
+        try:
+            response = requests.post(
+                f"{STEWARD_URL}/v1/agent/outcomes",
+                json=payload,
+                timeout=180,
+            )
+            output = _json_response(response)
+        except Exception:
+            _finish_tool_log(
+                tool="memory.submit_agent_outcome",
+                project_id=project_id,
+                outcome="error",
+                started_at=started_at,
+            )
+            raise
+        _finish_tool_log(
+            tool="memory.submit_agent_outcome",
+            project_id=project_id,
+            outcome="ok",
+            started_at=started_at,
+            extra={"outcome_id": outcome_id},
         )
-        return _json_response(response)
+        return output
 
     @mcp.tool(name="memory.submit_context_feedback")
     def submit_context_feedback(
@@ -129,18 +264,36 @@ def register_agent_tools(mcp: FastMCP) -> None:
         feedback_id: Optional[str] = None,
     ) -> str:
         """Report retrieval quality; this operation never mutates memory directly."""
-        response = requests.post(
-            f"{STEWARD_URL}/v1/context/feedback",
-            json={
-                "project_id": project_id,
-                "context_request_id": context_request_id,
-                "feedback_id": feedback_id,
-                "task_id": task_id,
-                "session_id": session_id,
-                "used_memory_ids": used_memory_ids or [],
-                "irrelevant_memory_ids": irrelevant_memory_ids or [],
-                "missing_context": missing_context,
-            },
-            timeout=30,
+        started_at = metric_started()
+        try:
+            response = requests.post(
+                f"{STEWARD_URL}/v1/context/feedback",
+                json={
+                    "project_id": project_id,
+                    "context_request_id": context_request_id,
+                    "feedback_id": feedback_id,
+                    "task_id": task_id,
+                    "session_id": session_id,
+                    "used_memory_ids": used_memory_ids or [],
+                    "irrelevant_memory_ids": irrelevant_memory_ids or [],
+                    "missing_context": missing_context,
+                },
+                timeout=30,
+            )
+            output = _json_response(response)
+        except Exception:
+            _finish_tool_log(
+                tool="memory.submit_context_feedback",
+                project_id=project_id,
+                outcome="error",
+                started_at=started_at,
+            )
+            raise
+        _finish_tool_log(
+            tool="memory.submit_context_feedback",
+            project_id=project_id,
+            outcome="ok",
+            started_at=started_at,
+            extra={"context_request_id": context_request_id},
         )
-        return _json_response(response)
+        return output

@@ -10,7 +10,7 @@ import requests
 from fastmcp import FastMCP
 from qdrant_client import QdrantClient
 from starlette.requests import Request
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 
 from memory_steward_mcp.agent_plane import register_agent_tools
 from memory_steward_mcp.codegraph_plane import register_codegraph_plane
@@ -18,6 +18,7 @@ from memory_steward_mcp.config import EMBEDDINGS_URL, QDRANT_URL
 from memory_steward_mcp.content_plane import _ingest_text_internal, register_content_tools
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
 from memory_steward_mcp.git_plane import register_git_tools
+from memory_steward_mcp.metrics import render as render_metrics
 from memory_steward_mcp.stability_plane import register_stability_tools
 
 # Configure Logging
@@ -33,6 +34,12 @@ mcp = FastMCP("Memory Steward Glass Pane")
 @mcp.custom_route("/healthz", methods=["GET"])
 async def health_check(request: Request) -> PlainTextResponse:
     return PlainTextResponse("OK")
+
+
+@mcp.custom_route("/metrics", methods=["GET"])
+async def metrics(request: Request) -> Response:
+    payload, content_type = render_metrics()
+    return Response(payload, media_type=content_type)
 
 try:
     qdrant = QdrantClient(QDRANT_URL, timeout=5)

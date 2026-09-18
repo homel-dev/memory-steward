@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import memory_router.request_context as request_context_core
 import memory_router.retrieval as retrieval_core
@@ -16,6 +16,12 @@ import memory_router.schemas as schemas_core
 import memory_router.upstream as upstream_core
 from memory_router import config
 from memory_router.mcp_bridge import handle_glap
+from memory_router.metrics import (
+    observe as observe_metric,
+    observe_retrieval,
+    render as render_metrics,
+    started as metric_started,
+)
 from memory_router.schemas import (
     ArtifactSelector,
     ChatCompletionRequest,
@@ -144,6 +150,12 @@ def healthz():
     return {"ok": True}
 
 
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    payload, content_type = render_metrics()
+    return Response(content=payload, media_type=content_type)
+
+
 @app.get("/v1/models")
 def list_models():
     return {
@@ -161,28 +173,91 @@ def list_models():
 
 @app.post("/v1/reference/search")
 def reference_search(req: ReferenceSearchRequest, http_req: Request):
+    started_at = metric_started()
+    request_id = uuid.uuid4().hex
     pid = _project_id(http_req)
-    query_vec = _embed_one(req.query)
-    candidates = _qdrant_reference(
-        query_vec,
-        req.limit,
-        reference_filters=req.reference_filters,
+    telemetry.request_begin(
+        request_id=request_id,
+        project_id=pid,
+        operation="reference_search",
+        origin=_origin_base(http_req),
+        origin_hash=None,
     )
-    return {
-        "project_id": pid,
-        "query": req.query,
-        "reference_filters": req.reference_filters or {},
-        "items": [_reference_candidate_payload(candidate) for candidate in candidates],
-    }
+    try:
+        with telemetry.step(
+            request_id=request_id,
+            project_id=pid,
+            name="reference_search",
+            extra_json={
+                "query_preview": req.query[:512],
+                "reference_filters": req.reference_filters or {},
+                "limit": req.limit,
+            },
+        ):
+            query_vec = _embed_one(req.query)
+            candidates = _qdrant_reference(
+                query_vec,
+                req.limit,
+                reference_filters=req.reference_filters,
+            )
+        count = len(candidates)
+        telemetry.retrieval_write(
+            request_id=request_id,
+            project_id=pid,
+            dense_candidates=count,
+            selected_topk=count,
+            context_tokens_est=0,
+        )
+        observe_retrieval("reference_search", candidates=count, selected=count)
+        telemetry.request_end(request_id=request_id, http_status=200)
+        observe_metric("reference_search", "ok", started_at, results=count)
+        log.info(
+            "reference.search request_id=%s project_id=%s limit=%d results=%d filters=%s query=%s",
+            request_id, pid, req.limit, count, json.dumps(req.reference_filters or {}, sort_keys=True), req.query[:512],
+        )
+        return {
+            "request_id": request_id,
+            "project_id": pid,
+            "query": req.query,
+            "reference_filters": req.reference_filters or {},
+            "items": [_reference_candidate_payload(candidate) for candidate in candidates],
+        }
+    except Exception as exc:
+        telemetry.request_end(
+            request_id=request_id, http_status=500, error_kind=type(exc).__name__, error_detail=str(exc)
+        )
+        observe_metric("reference_search", "error", started_at)
+        raise
 
 
 @app.get("/v1/reference/{chunk_id}")
 def reference_get(chunk_id: str, http_req: Request):
+    started_at = metric_started()
+    request_id = uuid.uuid4().hex
     pid = _project_id(http_req)
-    item = _qdrant_reference_get(chunk_id)
+    telemetry.request_begin(
+        request_id=request_id,
+        project_id=pid,
+        operation="reference_get",
+        origin=_origin_base(http_req),
+        origin_hash=None,
+    )
+    try:
+        with telemetry.step(request_id=request_id, project_id=pid, name="reference_get"):
+            item = _qdrant_reference_get(chunk_id)
+    except Exception as exc:
+        telemetry.request_end(
+            request_id=request_id, http_status=500, error_kind=type(exc).__name__, error_detail=str(exc)
+        )
+        observe_metric("reference_get", "error", started_at)
+        raise
     if item is None:
+        telemetry.request_end(request_id=request_id, http_status=404)
+        observe_metric("reference_get", "not_found", started_at)
         raise HTTPException(status_code=404, detail="reference chunk not found")
-    return {"project_id": pid, **item}
+    telemetry.request_end(request_id=request_id, http_status=200)
+    observe_metric("reference_get", "ok", started_at, results=1)
+    return {"request_id": request_id, "project_id": pid, **item}
 
 
 @app.post("/v1/context/retrieve")
@@ -195,9 +270,11 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
     origin = _origin_base(http_req)
     model = (req.model or "").strip() or config.effective_builder_model() or _get_builder_default_model()
 
+    started_at = metric_started()
     telemetry.request_begin(
         request_id=context_request_id,
         project_id=pid,
+        operation="context_retrieve",
         origin=origin,
         origin_hash=None,
         model_requested=req.model,
@@ -207,6 +284,18 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
         dynamic_tokens_est=None,
     )
     try:
+        input_handle = telemetry.step_begin(
+            request_id=context_request_id,
+            project_id=pid,
+            name="request_input",
+            extra_json={
+                "query_preview": (req.query or "")[:512],
+                "reference_filters": req.reference_filters or {},
+                "artifact_selector_count": len(req.artifact_selectors),
+                "mode": req.mode,
+            },
+        )
+        telemetry.step_end(handle=input_handle, ok=True)
         retrieval = _retrieve_context_structured(
             request_id=context_request_id,
             project_id=pid,
@@ -227,12 +316,22 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
             dropped_no_content=accounting["dropped_no_content"],
             dropped_other=0,
         )
+        observe_retrieval(
+            "context_retrieve",
+            candidates=accounting["dense_candidates"],
+            selected=accounting["selected_topk"],
+        )
         telemetry.request_end(
             request_id=context_request_id,
             http_status=200,
             context_budget_max=config.effective_max_context_tokens(),
             static_tokens_est=accounting["static_tokens_est"],
             dynamic_tokens_est=accounting["dynamic_tokens_est"],
+        )
+        observe_metric("context_retrieve", "ok", started_at, results=accounting["selected_topk"])
+        log.info(
+            "context.retrieve request_id=%s project_id=%s selected=%d query=%s",
+            context_request_id, pid, accounting["selected_topk"], (req.query or "")[:512],
         )
         return {
             "context_request_id": context_request_id,
@@ -253,6 +352,7 @@ def retrieve_context(req: ContextRetrieveRequest, http_req: Request):
             error_kind=type(exc).__name__,
             error_detail=str(exc),
         )
+        observe_metric("context_retrieve", "error", started_at)
         log.exception("agent context retrieval failed request_id=%s", context_request_id)
         raise HTTPException(status_code=500, detail="context retrieval failed") from exc
 
@@ -286,6 +386,7 @@ def chat(req: ChatCompletionRequest, http_req: Request):
     telemetry.request_begin(
         request_id=request_id,
         project_id=pid,
+        operation="chat",
         origin=origin,
         origin_hash=None,
         model_requested=model_requested,

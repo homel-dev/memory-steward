@@ -145,6 +145,32 @@ data:
       forward_to = [prometheus.remote_write.oco.receiver]
     }
 
+    prometheus.scrape "memory_router" {
+      targets = [
+        {
+          "__address__" = "memory-router:8080",
+          "project"     = "memory-steward",
+          "namespace"   = "ms",
+          "service"     = "memory-router",
+        },
+      ]
+      metrics_path = "/metrics"
+      forward_to   = [prometheus.remote_write.oco.receiver]
+    }
+
+    prometheus.scrape "memory_steward_mcp" {
+      targets = [
+        {
+          "__address__" = "memory-steward-mcp:8081",
+          "project"     = "memory-steward",
+          "namespace"   = "ms",
+          "service"     = "memory-steward-mcp",
+        },
+      ]
+      metrics_path = "/metrics"
+      forward_to   = [prometheus.remote_write.oco.receiver]
+    }
+
     otelcol.receiver.otlp "local" {
       grpc {
         endpoint = "0.0.0.0:4317"
