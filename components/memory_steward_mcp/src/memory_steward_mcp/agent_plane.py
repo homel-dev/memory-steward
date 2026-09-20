@@ -207,7 +207,7 @@ def register_agent_tools(mcp: FastMCP) -> None:
         repository_state: Optional[dict[str, Any]] = None,
         evidence: Optional[list[Any]] = None,
         scope: Optional[str] = None,
-        admit_knowledge: bool = True,
+        admit_knowledge: bool = False,
     ) -> str:
         """Submit structured agent execution evidence for governed admission."""
         payload = {
