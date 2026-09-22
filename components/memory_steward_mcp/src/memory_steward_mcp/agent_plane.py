@@ -225,7 +225,7 @@ def register_agent_tools(mcp: FastMCP) -> None:
             "repository_state": repository_state or {},
             "evidence": evidence or [],
             "scope": scope,
-            "admit_knowledge": admit_knowledge,
+            "admit_knowledge": False,
         }
         started_at = metric_started()
         try:
