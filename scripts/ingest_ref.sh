@@ -26,18 +26,18 @@ readonly -a PROJECTS=(
  # 'kro|Kro 0.10.0|kubernetes-sigs/kro|kro|0.10.0|website/versioned_docs/version-0.10.0-rc.0|0e8582fd9307bcdba6fe5d6b34becd3f41f4590a|.md'
 
   # UNICOP product documentation.
-  'netbox|NetBox 4.7.2|netbox-community/netbox|netbox|4.7.2|docs|v4.7.2|.md'
-  'kafka|Apache Kafka 4.2.2|apache/kafka|kafka|4.2.2|docs|4.2.2|.md'
-  'awx|AWX 24.6.1|ansible/awx|awx|24.6.1|docs|24.6.1|.md'
-  'eda|Ansible EDA server snapshot 2026-10-01|ansible/eda-server|eda-server|main-2026-10-01|docs|1ca0232000b39bf5f9e2ed1ece3703f10ae2b7ec|.md'
-  'vault|HashiCorp Vault 2.1.1|hashicorp/vault|vault|2.1.1|website/content/docs|v2.1.1|.mdx'
-  'keycloak|Keycloak 26.8.0|keycloak/keycloak|keycloak|26.8.0|docs/guides|26.8.0|.adoc'
+#  'netbox|NetBox 4.7.2|netbox-community/netbox|netbox|4.7.2|docs|v4.7.2|.md'
+#  'kafka|Apache Kafka 4.2.2|apache/kafka|kafka|4.2.2|docs|4.2.2|.md'
+#  'awx|AWX 24.6.1|ansible/awx|awx|24.6.1|docs|24.6.1|.md'
+#  'eda|Ansible EDA server snapshot 2026-10-01|ansible/eda-server|eda-server|main-2026-10-01|docs|1ca0232000b39bf5f9e2ed1ece3703f10ae2b7ec|.md'
   'bind9|BIND 9.20.29 ARM including DLZ|isc-projects/bind9|bind9|9.20.29|doc/arm|v9.20.29|.rst'
-
   # Kubernetes deployment/operator documentation used by the platform.
   'strimzi|Strimzi Kafka Operator 1.2.0|strimzi/strimzi-kafka-operator|strimzi|1.2.0|documentation|1.2.0|.adoc'
   'awx-operator|AWX Operator 2.19.1|ansible/awx-operator|awx-operator|2.19.1|docs|2.19.1|.md'
   'eda-operator|Ansible EDA Server Operator snapshot 2026-10-01|ansible/eda-server-operator|eda-server-operator|main-2026-10-01|docs|a95bbf59c162f9b4dc0133e566a35b954d71d15d|.md'
+  'vault|HashiCorp Vault 2.1.1|hashicorp/web-unified-docs|vault|2.1.1|content/vault/v2.x/content|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
+  'terraform|HashiCorp Terraform 1.16.4|hashicorp/web-unified-docs|terraform|1.16.4|content/terraform/v1.16.x/docs|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
+  'keycloak|Keycloak 26.8.0|keycloak/keycloak.github.io|keycloak|26.8.0|docs/26.8.0|5c19aed52054ed7c6424a88330a51cb589f251b0|.html'
 )
 
 fail() {
