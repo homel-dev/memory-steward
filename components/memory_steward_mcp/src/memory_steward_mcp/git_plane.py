@@ -228,20 +228,57 @@ class _GitHubAdapter:
         ]
 
     def list_files(self, project: str, path: str, ref: str) -> list[dict]:
-        # GitHub Trees API — recursive, single call
         owner, repo = project.split("/", 1)
+        normalized_path = path.strip("/")
+        treeish = ref
+
+        # Resolve the requested directory first. Recursive GitHub tree responses
+        # are truncated for large repositories such as hashicorp/web-unified-docs.
+        if normalized_path:
+            for segment in normalized_path.split("/"):
+                r = requests.get(
+                    self._api(f"/repos/{owner}/{repo}/git/trees/{treeish}"),
+                    headers=self._headers(),
+                    timeout=30,
+                )
+                r.raise_for_status()
+                entry = next(
+                    (
+                        item
+                        for item in r.json().get("tree", [])
+                        if item.get("type") == "tree" and item.get("path") == segment
+                    ),
+                    None,
+                )
+                if entry is None:
+                    return []
+                treeish = entry["sha"]
+
         r = requests.get(
-            self._api(f"/repos/{owner}/{repo}/git/trees/{ref}"),
+            self._api(f"/repos/{owner}/{repo}/git/trees/{treeish}"),
             headers=self._headers(),
             params={"recursive": "1"},
             timeout=30,
         )
         r.raise_for_status()
-        tree = r.json().get("tree", [])
+        payload = r.json()
+
+        if payload.get("truncated"):
+            scope = normalized_path or "/"
+            raise RuntimeError(
+                f"GitHub tree for {project}/{scope} @ {ref} is truncated; "
+                "use a narrower path"
+            )
+
+        prefix = f"{normalized_path}/" if normalized_path else ""
         return [
-            {"name": t["path"].split("/")[-1], "path": t["path"], "type": "blob"}
-            for t in tree
-            if t["type"] == "blob" and (not path or t["path"].startswith(path))
+            {
+                "name": item["path"].split("/")[-1],
+                "path": f"{prefix}{item['path']}",
+                "type": "blob",
+            }
+            for item in payload.get("tree", [])
+            if item.get("type") == "blob"
         ]
 
     def fetch_file(self, project: str, file_path: str, ref: str) -> str:
