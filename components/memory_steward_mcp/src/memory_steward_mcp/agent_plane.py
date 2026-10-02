@@ -13,7 +13,8 @@ from fastmcp import FastMCP
 from fastmcp.server.context import request_ctx
 
 from memory_steward_mcp.config import MEMORY_ROUTER_URL, STEWARD_URL
-from memory_steward_mcp.metrics import observe as observe_tool, started as metric_started
+from memory_steward_mcp.metrics import observe as observe_tool
+from memory_steward_mcp.metrics import started as metric_started
 
 log = logging.getLogger("memory-steward-mcp.agent")
 

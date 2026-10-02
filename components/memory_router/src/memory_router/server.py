@@ -16,12 +16,10 @@ import memory_router.schemas as schemas_core
 import memory_router.upstream as upstream_core
 from memory_router import config
 from memory_router.mcp_bridge import handle_glap
-from memory_router.metrics import (
-    observe as observe_metric,
-    observe_retrieval,
-    render as render_metrics,
-    started as metric_started,
-)
+from memory_router.metrics import observe as observe_metric
+from memory_router.metrics import observe_retrieval
+from memory_router.metrics import render as render_metrics
+from memory_router.metrics import started as metric_started
 from memory_router.schemas import (
     ArtifactSelector,
     ChatCompletionRequest,
