@@ -380,8 +380,39 @@ tasks:
 
   ref:list:
     desc: 'List reference-memory namespaces through MCP'
+    silent: true
     cmds:
-      - kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- fastmcp call {{.MCP_LOCAL_URL}} ref_list --auth none
+      - |
+        set -eu
+
+        kubectl exec -n {{.NAMESPACE}} deployment/memory-steward-mcp -- \
+          fastmcp call {{.MCP_LOCAL_URL}} ref_list --auth none \
+        | jq -r '.result' \
+        | awk '
+            BEGIN {
+              printf "%-32s %-36s %10s %10s\n", "NAMESPACE", "SCOPES", "CHUNKS", "SOURCES"
+              printf "%-32s %-36s %10s %10s\n", "---------", "------", "------", "-------"
+            }
+
+            /^- \*\*/ {
+              line = $0
+              sub(/^- \*\*/, "", line)
+
+              split(line, a, /\*\*  scopes=/)
+              namespace = a[1]
+
+              split(a[2], b, /  chunks=/)
+              scopes = b[1]
+
+              split(b[2], c, /  source=/)
+              chunks = c[1]
+              sources = c[2]
+              sub(/ sources$/, "", sources)
+
+              printf "%-32s %-36s %10s %10s\n",
+                namespace, scopes, chunks, sources
+            }
+          '
 
   ref:inspect:
     desc: 'Inspect reference memory: task ops:ref:inspect -- product=kicad version=9.0 limit=10'
