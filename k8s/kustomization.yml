@@ -22,3 +22,17 @@ resources:
   - backup/backup-cronjob.yaml
   - alloy
   - oco-consumer
+
+images:
+  - name: ghcr.io/homel-dev/memory-steward/embeddings
+    newTag: sha-23d16b5
+  - name: ghcr.io/homel-dev/memory-steward/memory-router
+    newTag: sha-23d16b5
+  - name: ghcr.io/homel-dev/memory-steward/memory-steward
+    newTag: sha-23d16b5
+  - name: ghcr.io/homel-dev/memory-steward/memory-steward-mcp
+    newTag: sha-23d16b5
+  - name: ghcr.io/homel-dev/memory-steward/memory-steward-list
+    newTag: sha-23d16b5
+  - name: ghcr.io/homel-dev/memory-steward/tooling
+    newTag: sha-23d16b5
