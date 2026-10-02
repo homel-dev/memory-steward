@@ -1,5 +1,5 @@
 # .github/workflows/build-images.yml
-name: Build & Publish images to GHCR (amd64 & arm64)
+name: Runtime images
 
 concurrency:
   group: build-${{ github.ref }}
@@ -18,8 +18,8 @@ permissions:
   packages: write
 
 jobs:
-  build_and_push:
-    name: Build & push (${{ matrix.component }})
+  build-runtime-images:
+    name: Build and publish runtime image (${{ matrix.component }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -50,27 +50,27 @@ jobs:
             dockerfile: ./components/tooling/Dockerfile
 
     steps:
-      - name: Check out
+      - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
 
-      - name: Set up QEMU (multi-arch)
+      - name: Set up QEMU
         uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a
 
-      - name: Set up Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
         with:
           version: v0.22.0
 
-      - name: Login to GHCR
+      - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Docker metadata
+      - name: Compute image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
@@ -81,7 +81,7 @@ jobs:
             type=sha,format=long
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build & push
+      - name: Build and publish
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: ${{ matrix.context }}
@@ -94,48 +94,37 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 
 
-  pin_deployed_images:
-    name: Pin deployed image digests
-    if: github.ref == 'refs/heads/main'
-    needs: build_and_push
+  promote-runtime-images:
+    name: Promote runtime image digests to GitOps manifests
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    needs: [build-runtime-images]
     permissions:
       contents: write
       packages: read
 
     steps:
-      - name: Check out current main
+      - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          ref: main
-          fetch-depth: 1
 
-      - name: Reject stale build
-        shell: bash
-        run: |
-          set -euo pipefail
-          current_head="$(git rev-parse HEAD)"
-          if [ "$current_head" != "$GITHUB_SHA" ]; then
-            echo "main moved: built=$GITHUB_SHA current=$current_head" >&2
-            exit 1
-          fi
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
-        with:
-          version: v0.22.0
-
-      - name: Login to GHCR
+      - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve registry digests and update pins
+      - name: Pin published digests and push desired state
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin main
+          current_main="$(git rev-parse origin/main)"
+          if [ "$current_main" != "$GITHUB_SHA" ]; then
+            echo "main advanced to $current_main; skipping stale image promotion for $GITHUB_SHA"
+            exit 0
+          fi
+          git checkout -B main origin/main
 
           components=(
             embeddings
@@ -149,10 +138,8 @@ jobs:
           : > /tmp/image-pins
           for component in "${components[@]}"; do
             ref="ghcr.io/${GITHUB_REPOSITORY}/${component}:sha-${GITHUB_SHA}"
-            digest="$(
-              docker buildx imagetools inspect "$ref" |
-                awk '$1 == "Digest:" { print $2; exit }'
-            )"
+            inspect="$(docker buildx imagetools inspect "$ref")"
+            digest="$(awk '$1 == "Digest:" && !found { print $2; found=1 }' <<<"$inspect")"
             if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
               echo "Could not resolve digest for $ref: '$digest'" >&2
               exit 1
@@ -207,9 +194,7 @@ jobs:
 
           runtime_contract = Path("k8s/runtime-contract.yaml")
           text = runtime_contract.read_text()
-          worker_image = (
-              f'{prefix}/memory-steward@{pins["memory-steward"]}'
-          )
+          worker_image = f'{prefix}/memory-steward@{pins["memory-steward"]}'
           text, count = re.subn(
               r'(?m)^  CODEGRAPH_WORKER_IMAGE: ".*"$',
               f'  CODEGRAPH_WORKER_IMAGE: "{worker_image}"',
@@ -223,14 +208,13 @@ jobs:
           runtime_contract.write_text(text)
           PY
 
-          git diff --check
-          git add k8s/kustomization.yml k8s/runtime-contract.yaml
-          if git diff --cached --quiet; then
-            echo "Image digests already pinned; nothing to commit."
+          if git diff --quiet -- k8s/kustomization.yml k8s/runtime-contract.yaml; then
+            echo "GitOps manifests already reference the published runtime image digests"
             exit 0
           fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(k8s): pin runtime images for ${GITHUB_SHA:0:12}"
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add k8s/kustomization.yml k8s/runtime-contract.yaml
+          git commit -m "chore(memory-steward): promote runtime images ${GITHUB_SHA::12}"
           git push origin HEAD:main
