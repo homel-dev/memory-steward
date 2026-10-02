@@ -25,14 +25,14 @@ resources:
 
 images:
   - name: ghcr.io/homel-dev/memory-steward/embeddings
-    newTag: sha-23d16b5
+    digest: sha256:d88c5302d643d7dac1240fc37c54c358de5d95dacbd371b8bff9f46aca986741
   - name: ghcr.io/homel-dev/memory-steward/memory-router
-    newTag: sha-23d16b5
+    digest: sha256:1933bec02655d87d4f4ba4dee20ad1776673faec14a5bdb4bc79b3dbfd86270b
   - name: ghcr.io/homel-dev/memory-steward/memory-steward
-    newTag: sha-23d16b5
+    digest: sha256:54859732af929a77ce42bc480ddd02db005b03421ad2bdbce51c5aa1947e895e
   - name: ghcr.io/homel-dev/memory-steward/memory-steward-mcp
-    newTag: sha-23d16b5
+    digest: sha256:d0d3633037e81658fa126b61d07359861c457cb9936dfce0a3896240e475bae2
   - name: ghcr.io/homel-dev/memory-steward/memory-steward-list
-    newTag: sha-23d16b5
+    digest: sha256:014a50f30b8205eddadd01ea854805f16e3ab8593252757be07350ecc4ddddff
   - name: ghcr.io/homel-dev/memory-steward/tooling
-    newTag: sha-23d16b5
+    digest: sha256:284c7f355e839707848b0dc31464ddf9166b7b4def764fa6972c5a8bfa890f34
