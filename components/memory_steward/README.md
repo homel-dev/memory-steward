@@ -14,8 +14,8 @@ The service does not answer user chat requests and does not currently classify o
 - Optional durable-knowledge extraction from agent outcomes.
 - Context feedback persistence.
 - Steward admission/outcome/feedback telemetry.
-- CodeGraph MinIO event discovery and PostgreSQL registry insertion.
-- CodeGraph discovery queue control through PostgreSQL LISTEN/NOTIFY plus fallback scans.
+- Flux `GitRepository` `NewArtifact` ingestion into durable PostgreSQL CodeGraph build state.
+- CodeGraph build reconciliation through PostgreSQL LISTEN/NOTIFY plus fallback scans and Argo Workflows.
 
 ## HTTP API
 
@@ -40,10 +40,9 @@ The active path is extraction -> persistence. Migration 060's deterministic gate
 
 ## CodeGraph control-plane entry points
 
-The same image provides CodeGraph control-plane and worker process modes:
+The same image provides the CodeGraph control-plane and worker process:
 
-- `python -m memory_steward.codegraph_listener` — receives MinIO object-created webhooks on `/events/minio` and performs idempotent discovery inserts;
-- `python -m memory_steward.codegraph_controller` — claims discovered rows and creates isolated Kubernetes index Jobs;
-- `python -m memory_steward.codegraph_worker` with `CODEGRAPH_WORKER_MODE=index` — downloads the repository snapshot, verifies `.git`, resolves the exact Git SHA, performs full or safe incremental CodeGraph indexing, and persists the complete CodeGraph state back to MinIO.
+- `python -m memory_steward.codegraph_controller` — exposes `/events/flux`, persists `NewArtifact` events, reconciles the current Flux artifact, submits/observes Argo Workflows, and records the durable result;
+- `python -m memory_steward.codegraph_worker` with `CODEGRAPH_WORKER_MODE=flux-index` — downloads the exact Flux artifact, verifies its digest, performs a full CodeGraph index without requiring `.git`, and publishes a self-contained generation bundle to MinIO.
 
-The image pins the upstream CodeGraph engine version. Serve/reconcile worker modes remain future slices.
+The controller does not create Kubernetes Jobs directly. The image pins the upstream CodeGraph engine version; serving remains a later lifecycle step after a successful generation build.

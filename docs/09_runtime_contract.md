@@ -46,7 +46,6 @@ The Kubernetes namespace is `ms`.
 | `memory-steward-mcp` | Deployment | 8081 |
 | `reference-ingest-worker` | Deployment | none |
 | `memory-steward-list` | Deployment | 8001 |
-| `codegraph-listener` | Deployment | 8092 |
 | `codegraph-controller` | Deployment | 8093 |
 | `open-webui` | Deployment | 8080 |
 | `alloy` | DaemonSet | 4317 / 4318 |
@@ -173,8 +172,7 @@ Memory Steward owns telemetry semantics and OCO provisioning content. Namespace-
 | memory-steward | Admission/outcome/feedback service | 8090 |
 | memory-steward-mcp | FastMCP internal control/adapter service | 8081 /mcp |
 | memory-steward-list | Optional speech transcription | 8001 |
-| codegraph-listener | MinIO CodeGraph object-event ingress | 8092 /events/minio |
-| codegraph-controller | PostgreSQL-backed CodeGraph lifecycle/index controller | 8093 /healthz + worker callback |
+| codegraph-controller | Flux NewArtifact ingress + PostgreSQL/Argo CodeGraph build controller | 8093 /healthz + /events/flux |
 | embeddings | Resource-bounded dense embedding service | 8000 |
 | reference-ingest-worker | Durable Reference URL ingestion worker | none |
 | Postgres | Structured state/telemetry | 5432 |
@@ -216,18 +214,16 @@ Memory Steward owns telemetry semantics and OCO provisioning content. Namespace-
 | MCP / reference worker | REFERENCE_FETCH_MAX_BYTES | 67108864 | Maximum decompressed bytes accepted from one reference URL |
 | reference-ingest-worker | REFERENCE_INGEST_POLL_SECONDS | 2 | Empty-queue poll interval |
 | reference-ingest-worker | REFERENCE_INGEST_LEASE_SECONDS | 300 | Stale running-job lease timeout |
-| CodeGraph listener | POSTGRES_* | required | CodeGraph discovery registry persistence |
-| CodeGraph listener | CODEGRAPH_MINIO_BUCKETS / CODEGRAPH_MINIO_PREFIXES | empty | Optional event filters |
-| CodeGraph listener | CODEGRAPH_MINIO_WEBHOOK_TOKEN | empty | Optional bearer token for MinIO webhook delivery |
-| CodeGraph controller | POSTGRES_* | required | CodeGraph registry queue and LISTEN/NOTIFY |
-| CodeGraph controller | CODEGRAPH_CONTROLLER_BATCH_SIZE | 16 | Maximum discovery rows claimed per drain |
-| CodeGraph controller | CODEGRAPH_CONTROLLER_POLL_SECONDS | 5 | Fallback registry scan interval |
-| CodeGraph controller | CODEGRAPH_VERSION | 0.20.1 | Pinned CodeGraph producer version expected by index workers |
+| CodeGraph controller | POSTGRES_* | required | Durable `codegraph_builds` state and LISTEN/NOTIFY |
+| CodeGraph controller | CODEGRAPH_CONTROLLER_BATCH_SIZE | 16 | Maximum received/active builds reconciled per drain |
+| CodeGraph controller | CODEGRAPH_CONTROLLER_POLL_SECONDS | 5 | Fallback build scan interval |
+| CodeGraph controller | CODEGRAPH_WORKFLOW_TEMPLATE | codegraph-build | Argo WorkflowTemplate used for indexing |
+| CodeGraph controller | CODEGRAPH_GENERATION_BUCKET | codegraph | MinIO bucket for immutable CodeGraph generations |
+| CodeGraph controller | CODEGRAPH_WORKER_IMAGE | pinned memory-steward image digest | Image passed to Argo CodeGraph build Workflows |
+| CodeGraph controller | CODEGRAPH_VERSION | 0.20.1 | Pinned CodeGraph producer version |
 | CodeGraph controller | CODEGRAPH_INDEX_PROFILE | graph-only | Initial structural indexing profile |
-| CodeGraph controller | CODEGRAPH_WORKER_IMAGE | memory-steward image | Image used for isolated index Jobs |
-| CodeGraph controller | CODEGRAPH_WORKER_SECRET_NAME | homel-codegraph | Optional Secret injected into workers |
-| CodeGraph worker | MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY | required for indexing | MinIO/S3-compatible object access |
-| CodeGraph worker | CODEGRAPH_WORKER_CALLBACK_TOKEN | optional | Bearer token shared with controller callback endpoint |
+| CodeGraph controller | CODEGRAPH_FLUX_WEBHOOK_TOKEN | empty | Optional bearer token for `/events/flux` |
+| CodeGraph worker | MINIO_ENDPOINT / MINIO_ACCESS_KEY / MINIO_SECRET_KEY | required for indexing | MinIO/S3-compatible generation output |
 | LIST | DEVICE | cpu in manifest | Whisper device |
 | LIST | COMPUTE_TYPE | int8 in manifest | Whisper compute type |
 | LIST | WHISPER_MODEL_SIZE | component default | Whisper model size |

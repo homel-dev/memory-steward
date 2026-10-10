@@ -1,0 +1,57 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: codegraph-build
+  namespace: ms
+spec:
+  serviceAccountName: codegraph-worker
+  entrypoint: build
+  volumes:
+    - name: workspace
+      emptyDir: {}
+    - name: state
+      emptyDir: {}
+  templates:
+    - name: build
+      activeDeadlineSeconds: 3600
+      container:
+        name: index
+        image: "{{workflow.parameters.worker-image}}"
+        imagePullPolicy: Always
+        command: ["python", "-m", "memory_steward.codegraph_worker"]
+        envFrom:
+          - configMapRef:
+              name: homel-runtime-contract
+          - secretRef:
+              name: homel-codegraph
+              optional: true
+        env:
+          - name: CODEGRAPH_WORKER_MODE
+            value: "flux-index"
+          - name: CODEGRAPH_BUILD_ID
+            value: "{{workflow.parameters.build-id}}"
+          - name: CODEGRAPH_SOURCE_REF
+            value: "{{workflow.parameters.source-ref}}"
+          - name: CODEGRAPH_SOURCE_URL
+            value: "{{workflow.parameters.source-url}}"
+          - name: CODEGRAPH_SOURCE_REVISION
+            value: "{{workflow.parameters.source-revision}}"
+          - name: CODEGRAPH_SOURCE_DIGEST
+            value: "{{workflow.parameters.source-digest}}"
+          - name: CODEGRAPH_GENERATION_BUCKET
+            value: "{{workflow.parameters.generation-bucket}}"
+          - name: CODEGRAPH_GENERATION_KEY
+            value: "{{workflow.parameters.generation-key}}"
+          - name: CODEGRAPH_VERSION
+            value: "{{workflow.parameters.codegraph-version}}"
+          - name: CODEGRAPH_INDEX_PROFILE
+            value: "{{workflow.parameters.index-profile}}"
+          - name: CODEGRAPH_WORK_ROOT
+            value: "/workspace"
+          - name: CODEGRAPH_HOME
+            value: "/state/home"
+        volumeMounts:
+          - name: workspace
+            mountPath: /workspace
+          - name: state
+            mountPath: /state

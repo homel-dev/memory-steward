@@ -1,18 +1,6 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: codegraph-listener
-  namespace: ms
-spec:
-  selector:
-    app: codegraph-listener
-  ports:
-    - port: 8092
-      targetPort: 8092
----
-apiVersion: v1
-kind: Service
-metadata:
   name: codegraph-controller
   namespace: ms
 spec:
@@ -40,12 +28,9 @@ metadata:
   name: codegraph-controller
   namespace: ms
 rules:
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["create", "get", "list", "watch", "delete"]
-  - apiGroups: [""]
-    resources: ["pods", "pods/log"]
-    verbs: ["get", "list"]
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["create", "get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -61,42 +46,51 @@ subjects:
     name: codegraph-controller
     namespace: ms
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
 metadata:
-  name: codegraph-listener
+  name: ms-codegraph-flux-source-reader
+rules:
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["gitrepositories"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ms-codegraph-flux-source-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ms-codegraph-flux-source-reader
+subjects:
+  - kind: ServiceAccount
+    name: codegraph-controller
+    namespace: ms
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: codegraph-worker-argo-executor
   namespace: ms
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: codegraph-listener
-  template:
-    metadata:
-      labels:
-        app: codegraph-listener
-    spec:
-      containers:
-        - name: listener
-          image: ghcr.io/homel-dev/memory-steward/memory-steward:latest
-          imagePullPolicy: Always
-          command: ["python", "-m", "memory_steward.codegraph_listener"]
-          ports:
-            - containerPort: 8092
-          envFrom:
-            - configMapRef:
-                name: homel-runtime-contract
-            - secretRef:
-                name: homel-postgres
-          env:
-            - name: CODEGRAPH_LISTENER_PORT
-              value: "8092"
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 8092
-            initialDelaySeconds: 2
-            periodSeconds: 5
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: codegraph-worker-argo-executor
+  namespace: ms
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: codegraph-worker-argo-executor
+subjects:
+  - kind: ServiceAccount
+    name: codegraph-worker
+    namespace: ms
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -136,14 +130,12 @@ spec:
                   fieldPath: metadata.namespace
             - name: CODEGRAPH_CONTROLLER_PORT
               value: "8093"
-            - name: CODEGRAPH_CONTROLLER_URL
-              value: "http://codegraph-controller:8093"
             - name: CODEGRAPH_CONTROLLER_BATCH_SIZE
               value: "16"
             - name: CODEGRAPH_CONTROLLER_POLL_SECONDS
               value: "5"
-            - name: CODEGRAPH_WORKER_SECRET_NAME
-              value: "homel-codegraph"
+            - name: CODEGRAPH_WORKFLOW_TEMPLATE
+              value: "codegraph-build"
             - name: CODEGRAPH_INDEX_PROFILE
               value: "graph-only"
             - name: CODEGRAPH_VERSION
@@ -154,50 +146,3 @@ spec:
               port: 8093
             initialDelaySeconds: 2
             periodSeconds: 5
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: codegraph-controller-serve
-  namespace: ms
-rules:
-  - apiGroups: [""]
-    resources: ["pods", "services"]
-    verbs: ["create", "get", "list", "watch", "delete"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: codegraph-controller-serve
-  namespace: ms
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: codegraph-controller-serve
-subjects:
-  - kind: ServiceAccount
-    name: codegraph-controller
-    namespace: ms
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: codegraph-serve-ingress
-  namespace: ms
-spec:
-  podSelector:
-    matchLabels:
-      app: codegraph-serve
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              app: codegraph-controller
-        - podSelector:
-            matchLabels:
-              app: memory-steward-mcp
-      ports:
-        - protocol: TCP
-          port: 8094

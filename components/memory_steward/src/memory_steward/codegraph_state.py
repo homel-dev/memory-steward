@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 STATE_ARTIFACT_SCHEMA_VERSION = 1
+GENERATION_ARTIFACT_SCHEMA_VERSION = 1
 CANONICAL_WORKSPACE = Path("/workspace/repo")
 
 
@@ -50,6 +51,60 @@ class CodeGraphStateManifest:
             base_revision=value.get("base_revision"),
             index_mode=str(value.get("index_mode") or "full"),
         )
+
+
+@dataclass(frozen=True)
+class CodeGraphGenerationManifest:
+    schema_version: int
+    source_ref: str
+    source_revision: str
+    source_digest: str
+    codegraph_version: str
+    index_profile: str
+    workspace_path: str
+    index_mode: str = "full"
+
+
+def prepare_snapshot_workspace(extracted_root: Path, canonical_path: Path = CANONICAL_WORKSPACE) -> Path:
+    if not extracted_root.is_dir():
+        raise CodeGraphStateError("repository snapshot extraction root is missing")
+    canonical_path.parent.mkdir(parents=True, exist_ok=True)
+    if canonical_path.exists() or canonical_path.is_symlink():
+        if canonical_path.is_dir() and not canonical_path.is_symlink():
+            shutil.rmtree(canonical_path)
+        else:
+            canonical_path.unlink()
+    shutil.move(str(extracted_root), str(canonical_path))
+    return canonical_path
+
+
+def create_generation_bundle(
+    *,
+    workspace: Path,
+    codegraph_home: Path,
+    manifest: CodeGraphGenerationManifest,
+    output_path: Path,
+) -> str:
+    state_dir = codegraph_home / ".codegraph"
+    if not workspace.is_dir():
+        raise CodeGraphStateError("CodeGraph workspace is missing")
+    if not state_dir.is_dir():
+        raise CodeGraphStateError("CodeGraph state directory was not created")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="codegraph-generation-") as tmp_dir:
+        stage = Path(tmp_dir)
+        (stage / "manifest.json").write_text(
+            json.dumps(asdict(manifest), sort_keys=True, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        shutil.copytree(workspace, stage / "workspace", symlinks=True)
+        shutil.copytree(state_dir, stage / ".codegraph", symlinks=True)
+        with tarfile.open(output_path, "w:gz") as archive:
+            archive.add(stage / "manifest.json", arcname="manifest.json", recursive=False)
+            archive.add(stage / "workspace", arcname="workspace", recursive=True)
+            archive.add(stage / ".codegraph", arcname=".codegraph", recursive=True)
+    return sha256_file(output_path)
 
 
 def sha256_file(path: Path) -> str:

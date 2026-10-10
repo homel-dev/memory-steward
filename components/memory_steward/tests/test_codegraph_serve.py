@@ -3,8 +3,6 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from memory_steward.codegraph_controller import CodeGraphController
-from memory_steward.codegraph_controller import create_app as create_controller_app
 from memory_steward.codegraph_registry import ServeWork
 from memory_steward.codegraph_serve import (
     ServeWorkerConfig,
@@ -62,102 +60,6 @@ def _config() -> ServeWorkerConfig:
         codegraph_home=Path("/state/home"),
         port=8094,
     )
-
-
-def test_controller_launches_reserved_serve_work():
-    registry = MagicMock()
-    registry.claim_discovered.return_value = []
-    registry.reserve_queued_index_work.return_value = []
-    registry.reserve_activating_serve_work.return_value = [_serve_work()]
-    index_launcher = MagicMock()
-    serve_launcher = MagicMock()
-    controller = CodeGraphController(
-        registry,
-        launcher=index_launcher,
-        serve_launcher=serve_launcher,
-        namespace="ms",
-        batch_size=4,
-    )
-
-    count = controller.drain_serve_once()
-
-    assert count == 1
-    registry.reserve_activating_serve_work.assert_called_once_with(limit=4, namespace="ms")
-    serve_launcher.launch.assert_called_once()
-
-
-def test_controller_accepts_serve_callback_only_after_probe(monkeypatch):
-    registry = MagicMock()
-    registry.complete_serve_success.return_value = True
-    controller = CodeGraphController(registry)
-
-    class _Response:
-        def __init__(self, payload=None):
-            self._payload = payload or {}
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self._payload
-
-    monkeypatch.setattr(
-        "memory_steward.codegraph_controller.requests.get",
-        lambda url, **kwargs: _Response({"tools": [{"name": "codegraph_symbol_search"}]})
-        if url.endswith("/v1/tools")
-        else _Response(),
-    )
-    client = TestClient(
-        create_controller_app(
-            controller,
-            callback_token="callback",
-            proxy_token="proxy",
-        )
-    )
-    work = _serve_work()
-    response = client.post(
-        "/v1/codegraph/serve-result",
-        headers={"Authorization": "Bearer callback"},
-        json={
-            "registry_id": work.registry_id,
-            "worker_generation": work.worker_generation,
-            "worker_endpoint": work.worker_endpoint,
-            "indexed_revision": work.indexed_revision,
-            "ok": True,
-        },
-    )
-
-    assert response.status_code == 200
-    registry.complete_serve_success.assert_called_once_with(
-        registry_id=work.registry_id,
-        worker_generation=work.worker_generation,
-        indexed_revision=work.indexed_revision,
-        worker_endpoint=work.worker_endpoint,
-    )
-
-
-def test_controller_rejects_arbitrary_serve_endpoint_before_probe(monkeypatch):
-    registry = MagicMock()
-    controller = CodeGraphController(registry, namespace="ms")
-    probe = MagicMock()
-    monkeypatch.setattr("memory_steward.codegraph_controller.requests.get", probe)
-    client = TestClient(create_controller_app(controller))
-    work = _serve_work()
-
-    response = client.post(
-        "/v1/codegraph/serve-result",
-        json={
-            "registry_id": work.registry_id,
-            "worker_generation": work.worker_generation,
-            "worker_endpoint": "http://postgres.ms.svc.cluster.local:5432",
-            "indexed_revision": work.indexed_revision,
-            "ok": True,
-        },
-    )
-
-    assert response.status_code == 409
-    probe.assert_not_called()
-    registry.complete_serve_success.assert_not_called()
 
 
 def test_adapter_requires_proxy_token_and_routes_tool_calls():

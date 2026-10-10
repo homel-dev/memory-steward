@@ -8,15 +8,9 @@ from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
 
-from memory_steward.codegraph_controller import CodeGraphController
-from memory_steward.codegraph_controller import create_app as create_controller_app
 from memory_steward.codegraph_listener import _discovery_record, create_app
 from memory_steward.codegraph_registry import (
     DiscoveryResult,
-    IncrementalBase,
-    IndexSuccess,
-    IndexWork,
-    QueuedWork,
     source_identity,
 )
 from memory_steward.codegraph_state import (
@@ -190,96 +184,6 @@ def test_listener_rejects_wrong_webhook_token(monkeypatch):
 
     assert response.status_code == 401
     registry.discover.assert_not_called()
-
-
-def test_controller_queues_discovered_work_without_launcher():
-    registry = MagicMock()
-    registry.claim_discovered.return_value = [
-        QueuedWork(
-            registry_id="id-1",
-            source_bucket="rr-exports",
-            source_object_key="repo.tar.zst",
-            repository="homel-dev/example",
-            run_id="run-123",
-            realm="workspace",
-        )
-    ]
-    controller = CodeGraphController(registry, launcher=None, batch_size=4, idle_poll_seconds=1.0)
-
-    count = controller.drain_once()
-
-    assert count == 1
-    registry.claim_discovered.assert_called_once_with(limit=4)
-    registry.reserve_queued_index_work.assert_not_called()
-
-
-def test_controller_launches_reserved_index_work():
-    registry = MagicMock()
-    registry.claim_discovered.return_value = []
-    work = IndexWork(
-        registry_id="00000000-0000-0000-0000-000000000001",
-        worker_generation=1,
-        worker_id="cg-index-000000000000-g1",
-        source_bucket="rr-exports",
-        source_object_key="repo.tar.gz",
-        source_version_id=None,
-        project_id="project-1",
-        run_id="run-1",
-        realm="workspace",
-        repository="homel-dev/example",
-        base=IncrementalBase(
-            artifact_bucket="rr-exports",
-            artifact_key="old.codegraph/state.tar.gz",
-            artifact_digest="deadbeef",
-            revision="a" * 40,
-        ),
-    )
-    registry.reserve_queued_index_work.return_value = [work]
-    launcher = MagicMock()
-    controller = CodeGraphController(registry, launcher=launcher, batch_size=4)
-
-    count = controller.drain_once()
-
-    assert count == 1
-    registry.reserve_queued_index_work.assert_called_once_with(
-        limit=4,
-        codegraph_version="0.20.1",
-        index_profile="graph-only",
-    )
-    launcher.launch.assert_called_once_with(work)
-
-
-def test_controller_accepts_successful_worker_callback():
-    registry = MagicMock()
-    registry.complete_index_success.return_value = True
-    controller = CodeGraphController(registry)
-    client = TestClient(create_controller_app(controller, callback_token="secret"))
-
-    response = client.post(
-        "/v1/codegraph/index-result",
-        headers={"Authorization": "Bearer secret"},
-        json={
-            "registry_id": "00000000-0000-0000-0000-000000000001",
-            "worker_generation": 2,
-            "ok": True,
-            "indexed_revision": "a" * 40,
-            "codegraph_version": "0.20.1",
-            "index_profile": "graph-only",
-            "index_mode": "incremental",
-            "base_revision": "b" * 40,
-            "state_artifact_bucket": "rr-exports",
-            "state_artifact_key": "repo.codegraph/state.tar.gz",
-            "state_artifact_digest": "c" * 64,
-            "state_artifact_schema_version": 1,
-            "duration_ms": 123,
-        },
-    )
-
-    assert response.status_code == 200
-    result = registry.complete_index_success.call_args.args[0]
-    assert isinstance(result, IndexSuccess)
-    assert result.index_mode == "incremental"
-    assert result.duration_ms == 123
 
 
 def test_state_bundle_round_trip(tmp_path):

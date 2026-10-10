@@ -1,0 +1,298 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from typing import Any
+
+import psycopg
+
+DEFAULT_BUILD_NOTIFY_CHANNEL = "codegraph_build_work"
+
+
+def postgres_dsn_from_env(application_name: str) -> str:
+    host = os.environ["POSTGRES_SERVICE_HOST"]
+    port = os.environ["POSTGRES_SERVICE_PORT"]
+    user = os.environ["POSTGRES_USER"]
+    password = os.environ["POSTGRES_PASSWORD"]
+    database = os.environ["POSTGRES_DB"]
+    sslmode = os.environ.get("POSTGRES_SSLMODE", "disable")
+    return (
+        f"postgresql://{user}:{password}@{host}:{port}/{database}"
+        f"?sslmode={sslmode}&application_name={application_name}"
+    )
+
+
+@dataclass(frozen=True)
+class FluxArtifactEvent:
+    source_api_version: str
+    source_kind: str
+    source_namespace: str
+    source_name: str
+    source_uid: str | None
+    artifact_revision: str
+    artifact_digest: str
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BuildRecord:
+    build_id: str
+    source_api_version: str
+    source_kind: str
+    source_namespace: str
+    source_name: str
+    source_uid: str | None
+    artifact_revision: str
+    artifact_digest: str
+    artifact_url: str | None
+    state: str
+    workflow_namespace: str | None
+    workflow_name: str | None
+    workflow_uid: str | None
+    generation_bucket: str | None
+    generation_key: str | None
+
+
+@dataclass(frozen=True)
+class RecordResult:
+    build_id: str
+    inserted: bool
+
+
+class CodeGraphBuildStore:
+    def __init__(self, dsn: str, *, notify_channel: str = DEFAULT_BUILD_NOTIFY_CHANNEL):
+        self._dsn = dsn
+        self.notify_channel = notify_channel
+
+    @classmethod
+    def from_env(cls, application_name: str = "memory-steward-codegraph-controller") -> "CodeGraphBuildStore":
+        return cls(postgres_dsn_from_env(application_name))
+
+    def _connect(self, *, autocommit: bool = False):
+        return psycopg.connect(self._dsn, autocommit=autocommit)
+
+    def notification_connection(self):
+        return self._connect(autocommit=True)
+
+    @staticmethod
+    def _row(row: tuple[Any, ...]) -> BuildRecord:
+        return BuildRecord(
+            build_id=str(row[0]),
+            source_api_version=str(row[1]),
+            source_kind=str(row[2]),
+            source_namespace=str(row[3]),
+            source_name=str(row[4]),
+            source_uid=row[5],
+            artifact_revision=str(row[6]),
+            artifact_digest=str(row[7]),
+            artifact_url=row[8],
+            state=str(row[9]),
+            workflow_namespace=row[10],
+            workflow_name=row[11],
+            workflow_uid=row[12],
+            generation_bucket=row[13],
+            generation_key=row[14],
+        )
+
+    def record_event(self, event: FluxArtifactEvent) -> RecordResult:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO codegraph_builds (
+                  source_api_version,
+                  source_kind,
+                  source_namespace,
+                  source_name,
+                  source_uid,
+                  artifact_revision,
+                  artifact_digest,
+                  source_event,
+                  state
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'received')
+                ON CONFLICT (source_namespace, source_kind, source_name, artifact_digest) DO NOTHING
+                RETURNING id::text
+                """,
+                (
+                    event.source_api_version,
+                    event.source_kind,
+                    event.source_namespace,
+                    event.source_name,
+                    event.source_uid,
+                    event.artifact_revision,
+                    event.artifact_digest,
+                    json.dumps(event.payload, separators=(",", ":")),
+                ),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                build_id = str(row[0])
+                cur.execute("SELECT pg_notify(%s, %s)", (self.notify_channel, build_id))
+                return RecordResult(build_id=build_id, inserted=True)
+
+            cur.execute(
+                """
+                SELECT id::text
+                FROM codegraph_builds
+                WHERE source_namespace = %s
+                  AND source_kind = %s
+                  AND source_name = %s
+                  AND artifact_digest = %s
+                """,
+                (
+                    event.source_namespace,
+                    event.source_kind,
+                    event.source_name,
+                    event.artifact_digest,
+                ),
+            )
+            existing = cur.fetchone()
+            if existing is None:
+                raise RuntimeError("CodeGraph build row disappeared after conflict")
+            return RecordResult(build_id=str(existing[0]), inserted=False)
+
+    def pending(self, *, limit: int) -> list[BuildRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  id::text, source_api_version, source_kind, source_namespace, source_name,
+                  source_uid, artifact_revision, artifact_digest, artifact_url, state,
+                  workflow_namespace, workflow_name, workflow_uid, generation_bucket, generation_key
+                FROM codegraph_builds
+                WHERE state = 'received'
+                ORDER BY received_at, id
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return [self._row(row) for row in cur.fetchall()]
+
+    def active(self, *, limit: int) -> list[BuildRecord]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                  id::text, source_api_version, source_kind, source_namespace, source_name,
+                  source_uid, artifact_revision, artifact_digest, artifact_url, state,
+                  workflow_namespace, workflow_name, workflow_uid, generation_bucket, generation_key
+                FROM codegraph_builds
+                WHERE state IN ('submitted', 'running')
+                ORDER BY submitted_at, id
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return [self._row(row) for row in cur.fetchall()]
+
+    def mark_superseded(self, build_id: str, detail: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_builds
+                SET state = 'superseded',
+                    error_detail = %s,
+                    finished_at = now(),
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND state = 'received'
+                """,
+                (detail[:4000], build_id),
+            )
+            return cur.rowcount == 1
+
+    def mark_submitted(
+        self,
+        *,
+        build_id: str,
+        artifact_url: str,
+        workflow_namespace: str,
+        workflow_name: str,
+        workflow_uid: str | None,
+        generation_bucket: str,
+        generation_key: str,
+    ) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_builds
+                SET artifact_url = %s,
+                    workflow_namespace = %s,
+                    workflow_name = %s,
+                    workflow_uid = %s,
+                    generation_bucket = %s,
+                    generation_key = %s,
+                    state = 'submitted',
+                    submitted_at = COALESCE(submitted_at, now()),
+                    error_detail = NULL,
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND state = 'received'
+                """,
+                (
+                    artifact_url,
+                    workflow_namespace,
+                    workflow_name,
+                    workflow_uid,
+                    generation_bucket,
+                    generation_key,
+                    build_id,
+                ),
+            )
+            return cur.rowcount == 1
+
+    def mark_running(self, build_id: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_builds
+                SET state = 'running',
+                    started_at = COALESCE(started_at, now()),
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND state = 'submitted'
+                """,
+                (build_id,),
+            )
+            return cur.rowcount == 1
+
+    def complete_success(self, *, build_id: str, result: dict[str, Any]) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_builds
+                SET state = 'succeeded',
+                    generation_digest = %s,
+                    generation_schema_version = %s,
+                    result = %s::jsonb,
+                    error_detail = NULL,
+                    finished_at = now(),
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND state IN ('submitted', 'running')
+                """,
+                (
+                    str(result["generation_digest"]),
+                    int(result["generation_schema_version"]),
+                    json.dumps(result, separators=(",", ":")),
+                    build_id,
+                ),
+            )
+            return cur.rowcount == 1
+
+    def complete_failure(self, *, build_id: str, detail: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE codegraph_builds
+                SET state = 'failed',
+                    error_detail = %s,
+                    finished_at = now(),
+                    updated_at = now()
+                WHERE id = %s::uuid
+                  AND state IN ('received', 'submitted', 'running')
+                """,
+                (detail[:4000], build_id),
+            )
+            return cur.rowcount == 1

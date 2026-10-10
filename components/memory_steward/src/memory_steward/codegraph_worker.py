@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -15,14 +16,18 @@ from urllib.parse import urlparse
 import requests
 
 from memory_steward.codegraph_state import (
+    GENERATION_ARTIFACT_SCHEMA_VERSION,
     STATE_ARTIFACT_SCHEMA_VERSION,
+    CodeGraphGenerationManifest,
     CodeGraphStateError,
     CodeGraphStateManifest,
+    create_generation_bundle,
     create_state_bundle,
     extract_archive,
     git_revision,
     incremental_is_safe,
     prepare_canonical_workspace,
+    prepare_snapshot_workspace,
     restore_state_bundle,
     state_artifact_key,
 )
@@ -32,6 +37,41 @@ log = logging.getLogger("memory-steward.codegraph-worker")
 
 class UnindexableError(CodeGraphStateError):
     pass
+
+
+@dataclass(frozen=True)
+class FluxIndexWorkerConfig:
+    build_id: str
+    source_ref: str
+    source_url: str
+    source_revision: str
+    source_digest: str
+    generation_bucket: str
+    generation_key: str
+    codegraph_version: str
+    index_profile: str
+    codegraph_binary: str
+    index_timeout_seconds: int
+    work_root: Path
+    codegraph_home: Path
+
+    @classmethod
+    def from_env(cls) -> "FluxIndexWorkerConfig":
+        return cls(
+            build_id=os.environ["CODEGRAPH_BUILD_ID"],
+            source_ref=os.environ["CODEGRAPH_SOURCE_REF"],
+            source_url=os.environ["CODEGRAPH_SOURCE_URL"],
+            source_revision=os.environ["CODEGRAPH_SOURCE_REVISION"],
+            source_digest=os.environ["CODEGRAPH_SOURCE_DIGEST"],
+            generation_bucket=os.environ["CODEGRAPH_GENERATION_BUCKET"],
+            generation_key=os.environ["CODEGRAPH_GENERATION_KEY"],
+            codegraph_version=os.environ.get("CODEGRAPH_VERSION", "0.20.1"),
+            index_profile=os.environ.get("CODEGRAPH_INDEX_PROFILE", "graph-only"),
+            codegraph_binary=os.environ.get("CODEGRAPH_BINARY", "/usr/local/bin/codegraph-server"),
+            index_timeout_seconds=int(os.environ.get("CODEGRAPH_INDEX_TIMEOUT_SECONDS", "1800")),
+            work_root=Path(os.environ.get("CODEGRAPH_WORK_ROOT", "/workspace")),
+            codegraph_home=Path(os.environ.get("CODEGRAPH_HOME", "/state/home")),
+        )
 
 
 @dataclass(frozen=True)
@@ -145,7 +185,7 @@ def _upload_object(
     )
 
 
-def _verify_codegraph_binary(config: IndexWorkerConfig) -> None:
+def _verify_codegraph_binary(config: IndexWorkerConfig | FluxIndexWorkerConfig) -> None:
     result = subprocess.run(
         [config.codegraph_binary, "--version"],
         check=False,
@@ -163,7 +203,7 @@ def _verify_codegraph_binary(config: IndexWorkerConfig) -> None:
         )
 
 
-def _run_codegraph(config: IndexWorkerConfig, repository_root: Path) -> tuple[str, str]:
+def _run_codegraph(config: IndexWorkerConfig | FluxIndexWorkerConfig, repository_root: Path) -> tuple[str, str]:
     command = [
         config.codegraph_binary,
         "--workspace",
@@ -195,6 +235,130 @@ def _run_codegraph(config: IndexWorkerConfig, repository_root: Path) -> tuple[st
     if result.returncode != 0:
         raise RuntimeError(f"CodeGraph indexing failed: {result.stderr[-4000:].strip()}")
     return result.stdout, result.stderr
+
+
+def _download_flux_artifact(*, url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with requests.get(url, stream=True, timeout=(10, 300)) as response:
+        response.raise_for_status()
+        with destination.open("wb") as output:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    output.write(chunk)
+
+
+def _verify_flux_digest(path: Path, expected: str) -> None:
+    algorithm, separator, wanted = expected.partition(":")
+    if not separator or not algorithm or not wanted:
+        raise RuntimeError(f"invalid Flux artifact digest: {expected!r}")
+    normalized = algorithm.lower().replace("-", "")
+    try:
+        digest = hashlib.new(normalized)
+    except ValueError as exc:
+        raise RuntimeError(f"unsupported Flux artifact digest algorithm: {algorithm}") from exc
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual.lower() != wanted.lower():
+        raise RuntimeError(f"Flux artifact digest mismatch: expected {expected}, got {algorithm}:{actual}")
+
+
+def _ensure_bucket(client: Any, bucket: str) -> None:
+    if client.bucket_exists(bucket):
+        return
+    try:
+        client.make_bucket(bucket)
+    except Exception:
+        if not client.bucket_exists(bucket):
+            raise
+
+
+def _upload_json(client: Any, *, bucket: str, object_key: str, payload: dict[str, Any], scratch: Path) -> None:
+    path = scratch / "result.json"
+    path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    client.fput_object(bucket, object_key, str(path), content_type="application/json")
+
+
+def run_flux_index(config: FluxIndexWorkerConfig) -> dict[str, Any]:
+    started = time.monotonic()
+    client = _minio_client()
+    config.work_root.mkdir(parents=True, exist_ok=True)
+    config.codegraph_home.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="codegraph-flux-index-", dir=config.work_root) as tmp_dir:
+        scratch = Path(tmp_dir)
+        source_archive = scratch / "source.tar.gz"
+        extracted = scratch / "source"
+
+        _download_flux_artifact(url=config.source_url, destination=source_archive)
+        _verify_flux_digest(source_archive, config.source_digest)
+        extract_archive(source_archive, extracted)
+        workspace = prepare_snapshot_workspace(extracted, config.work_root / "repo")
+
+        _verify_codegraph_binary(config)
+        _stdout, stderr = _run_codegraph(config, workspace)
+        if stderr:
+            log.debug("CodeGraph stderr tail: %s", stderr[-2000:])
+
+        manifest = CodeGraphGenerationManifest(
+            schema_version=GENERATION_ARTIFACT_SCHEMA_VERSION,
+            source_ref=config.source_ref,
+            source_revision=config.source_revision,
+            source_digest=config.source_digest,
+            codegraph_version=config.codegraph_version,
+            index_profile=config.index_profile,
+            workspace_path=str(workspace),
+            index_mode="full",
+        )
+        bundle = scratch / "generation-v1.tar.gz"
+        generation_digest = create_generation_bundle(
+            workspace=workspace,
+            codegraph_home=config.codegraph_home,
+            manifest=manifest,
+            output_path=bundle,
+        )
+
+        _ensure_bucket(client, config.generation_bucket)
+        _upload_object(
+            client,
+            bucket=config.generation_bucket,
+            object_key=config.generation_key,
+            source=bundle,
+            metadata={
+                "build-id": config.build_id,
+                "source-ref": config.source_ref,
+                "source-revision": config.source_revision,
+                "source-digest": config.source_digest,
+                "codegraph-version": config.codegraph_version,
+                "index-profile": config.index_profile,
+                "generation-sha256": generation_digest,
+                "generation-schema-version": str(GENERATION_ARTIFACT_SCHEMA_VERSION),
+            },
+        )
+
+        result = {
+            "build_id": config.build_id,
+            "source_ref": config.source_ref,
+            "source_revision": config.source_revision,
+            "source_digest": config.source_digest,
+            "codegraph_version": config.codegraph_version,
+            "index_profile": config.index_profile,
+            "index_mode": "full",
+            "generation_bucket": config.generation_bucket,
+            "generation_key": config.generation_key,
+            "generation_digest": generation_digest,
+            "generation_schema_version": GENERATION_ARTIFACT_SCHEMA_VERSION,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        }
+        _upload_json(
+            client,
+            bucket=config.generation_bucket,
+            object_key=f"{config.generation_key}.result.json",
+            payload=result,
+            scratch=scratch,
+        )
+        return result
 
 
 def _restore_incremental_base(
@@ -368,8 +532,19 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     mode = os.environ.get("CODEGRAPH_WORKER_MODE", "index")
+
+    if mode == "flux-index":
+        config = FluxIndexWorkerConfig.from_env()
+        try:
+            payload = run_flux_index(config)
+        except Exception:
+            log.exception("Flux CodeGraph index worker failed")
+            raise
+        print(json.dumps(payload, sort_keys=True))
+        return
+
     if mode != "index":
-        raise SystemExit(f"unsupported CodeGraph worker mode in this slice: {mode}")
+        raise SystemExit(f"unsupported CodeGraph worker mode: {mode}")
 
     config = IndexWorkerConfig.from_env()
     try:

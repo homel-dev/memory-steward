@@ -20,7 +20,6 @@ tasks:
       - kubectl rollout status deployment/memory-steward-mcp -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/reference-ingest-worker -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/memory-steward-list -n {{.NAMESPACE}} --timeout=300s
-      - kubectl rollout status deployment/codegraph-listener -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/codegraph-controller -n {{.NAMESPACE}} --timeout=180s
       - kubectl rollout status deployment/open-webui -n {{.NAMESPACE}} --timeout=300s
       - kubectl rollout status daemonset/alloy -n {{.NAMESPACE}} --timeout=180s
@@ -37,7 +36,6 @@ tasks:
             ("memory-steward", "http://memory-steward:8090/healthz"),
             ("memory-steward-mcp", "http://memory-steward-mcp:8081/healthz"),
             ("memory-steward-list", "http://memory-steward-list:8001/healthz"),
-            ("codegraph-listener", "http://codegraph-listener:8092/healthz"),
             ("codegraph-controller", "http://codegraph-controller:8093/healthz"),
             ("embeddings", "http://embeddings:8000/healthz"),
             ("open-webui", "http://open-webui:8080/health"),
@@ -54,18 +52,18 @@ tasks:
     desc: 'Stop stateless application Deployments; keep Postgres/Qdrant stateful stores running'
     prompt: 'Scale all Memory Steward application Deployments to 0 in namespace {{.NAMESPACE}}?'
     cmds:
-      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui --replicas=0 -n {{.NAMESPACE}}
+      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-controller deployment/open-webui --replicas=0 -n {{.NAMESPACE}}
 
   app:start:
     desc: 'Start stateless application Deployments and wait until they are Ready'
     cmds:
-      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui --replicas=1 -n {{.NAMESPACE}}
+      - kubectl scale deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-controller deployment/open-webui --replicas=1 -n {{.NAMESPACE}}
       - task: service:wait
 
   service:restart:
     desc: 'Restart all stateless Memory Steward application services'
     cmds:
-      - kubectl rollout restart deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-listener deployment/codegraph-controller deployment/open-webui -n {{.NAMESPACE}}
+      - kubectl rollout restart deployment/embeddings deployment/memory-router deployment/memory-steward deployment/memory-steward-mcp deployment/reference-ingest-worker deployment/memory-steward-list deployment/codegraph-controller deployment/open-webui -n {{.NAMESPACE}}
       - kubectl rollout restart daemonset/alloy -n {{.NAMESPACE}}
       - task: service:wait
 
@@ -100,10 +98,9 @@ tasks:
       - kubectl rollout status deployment/memory-steward-list -n {{.NAMESPACE}} --timeout=300s
 
   service:restart:codegraph:
-    desc: 'Restart CodeGraph listener and controller'
+    desc: 'Restart CodeGraph controller'
     cmds:
-      - kubectl rollout restart deployment/codegraph-listener deployment/codegraph-controller -n {{.NAMESPACE}}
-      - kubectl rollout status deployment/codegraph-listener -n {{.NAMESPACE}} --timeout=180s
+      - kubectl rollout restart deployment/codegraph-controller -n {{.NAMESPACE}}
       - kubectl rollout status deployment/codegraph-controller -n {{.NAMESPACE}} --timeout=180s
 
   service:restart:embeddings:
