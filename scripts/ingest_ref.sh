@@ -37,6 +37,8 @@ readonly -a PROJECTS=(
 #  'eda-operator|Ansible EDA Server Operator snapshot 2026-10-01|ansible/eda-server-operator|eda-server-operator|main-2026-10-01|docs|a95bbf59c162f9b4dc0133e566a35b954d71d15d|.md'
   'vault|HashiCorp Vault 2.1.1|hashicorp/web-unified-docs|vault|2.1.1|content/vault/v2.x/content|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
   'terraform|HashiCorp Terraform 1.16.4|hashicorp/web-unified-docs|terraform|1.16.4|content/terraform/v1.16.x/docs|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
+  'homel-standards|Homel organization standards|homel-dev/.github|homel-standards|73dd3a1722cdc116e6c16f76e42ff07375c39b48|docs|73dd3a1722cdc116e6c16f76e42ff07375c39b48|.md'
+
 #  'keycloak|Keycloak 26.8.0|keycloak/keycloak.github.io|keycloak|26.8.0|docs/26.8.0|5c19aed52054ed7c6424a88330a51cb589f251b0|.html'
 )
 
