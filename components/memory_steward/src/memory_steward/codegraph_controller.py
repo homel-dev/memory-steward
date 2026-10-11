@@ -312,11 +312,17 @@ def create_app(
             EVENTS.labels(outcome="unauthorized").inc()
             raise HTTPException(status_code=401, detail="invalid Flux webhook token")
         try:
-            event = parse_flux_new_artifact(payload)
+            event = parse_flux_new_artifact(
+                payload, artifact_lookup=controller.flux.get_artifact_for_source
+            )
         except ValueError as exc:
             EVENTS.labels(outcome="invalid").inc()
             log.warning("codegraph_event=invalid_flux_event reason=%s", str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            EVENTS.labels(outcome="lookup_failed").inc()
+            log.exception("codegraph_event=flux_artifact_lookup_failed")
+            raise HTTPException(status_code=503, detail="Flux source artifact unavailable") from exc
         if event is None:
             EVENTS.labels(outcome="ignored").inc()
             log.info("codegraph_event=ignored_flux_event reason=%s", str(payload.get("reason", "missing"))[:80])

@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - restore-job.yaml
+images:
+  - name: ghcr.io/homel-dev/memory-steward/tooling
+    digest: sha256:0c7b579e6fac8b90641e9228d64695f884a5d3b8978ca5703c2c2324b57488f0

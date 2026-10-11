@@ -10,13 +10,14 @@ RUN apt-get update \
          postgresql-client curl bash ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "psycopg[binary]==3.*" "requests>=2.31,<3"
+RUN pip install --no-cache-dir "psycopg[binary]==3.*" "requests>=2.31,<3" "minio>=7.2,<8"
 
 WORKDIR /opt/tooling
 
 # Operational scripts.
 COPY scripts/migrate.sh scripts/backup.sh scripts/restore.sh \
-     scripts/init_qdrant.sh scripts/memory_export.py /opt/tooling/
+     scripts/init_qdrant.sh scripts/memory_export.py \
+     scripts/bootstrap_restore.py /opt/tooling/
 # Migrations are BAKED IN: the image digest pins exactly which migrations exist.
 COPY sql/migrations/ /opt/tooling/migrations/
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from memory_steward.codegraph_builds import FluxArtifactEvent
 
@@ -16,14 +16,18 @@ class FluxArtifactStatus:
     digest: str
 
 
-def parse_flux_new_artifact(payload: dict[str, Any]) -> FluxArtifactEvent | None:
+def parse_flux_new_artifact(
+    payload: dict[str, Any],
+    *,
+    artifact_lookup: Callable[[str, str], FluxArtifactStatus] | None = None,
+) -> FluxArtifactEvent | None:
     if payload.get("reason") != "NewArtifact":
         return None
 
     involved = payload.get("involvedObject")
-    metadata = payload.get("metadata")
+    metadata = payload.get("metadata") or {}
     if not isinstance(involved, dict) or not isinstance(metadata, dict):
-        raise ValueError("Flux event must contain involvedObject and metadata")
+        raise ValueError("Flux event must contain involvedObject and valid metadata")
 
     api_version = involved.get("apiVersion")
     kind = involved.get("kind")
@@ -41,6 +45,12 @@ def parse_flux_new_artifact(payload: dict[str, Any]) -> FluxArtifactEvent | None
         raise ValueError("Flux GitRepository event is missing name")
     if uid is not None and not isinstance(uid, str):
         raise ValueError("Flux GitRepository event has invalid uid")
+    # Flux notification-controller generic Provider payloads may omit source
+    # artifact metadata. Read the authoritative GitRepository status instead.
+    if (not revision or not digest) and artifact_lookup is not None:
+        current = artifact_lookup(namespace, name)
+        revision = revision or current.revision
+        digest = digest or current.digest
     if not isinstance(revision, str) or not revision:
         raise ValueError("Flux NewArtifact event is missing revision metadata")
     if not isinstance(digest, str) or not digest:
@@ -70,12 +80,15 @@ class FluxSourceClient:
         self._api = api
 
     def get_artifact(self, event: FluxArtifactEvent) -> FluxArtifactStatus:
+        return self.get_artifact_for_source(event.source_namespace, event.source_name)
+
+    def get_artifact_for_source(self, namespace: str, name: str) -> FluxArtifactStatus:
         obj = self._api.get_namespaced_custom_object(
             group="source.toolkit.fluxcd.io",
             version="v1",
-            namespace=event.source_namespace,
+            namespace=namespace,
             plural="gitrepositories",
-            name=event.source_name,
+            name=name,
         )
         status = obj.get("status") if isinstance(obj, dict) else None
         artifact = status.get("artifact") if isinstance(status, dict) else None

@@ -91,7 +91,7 @@ tasks:
   k8s:deploy:
     desc: "Apply manifests"
     cmds:
-      - kubectl apply -f k8s/namespace.yaml
+      - kubectl apply -f k8s/infra/namespace.yaml
       - kubectl apply -f k8s/
       - kubectl apply -f k8s/tooling/
       - kubectl apply -f k8s/backup/

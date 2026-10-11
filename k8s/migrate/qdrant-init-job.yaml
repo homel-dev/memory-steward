@@ -1,0 +1,21 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: memory-qdrant-init
+  namespace: ms
+  annotations:
+    kustomize.toolkit.fluxcd.io/force: Enabled
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1200
+  template:
+    spec:
+      serviceAccountName: memory-tooling
+      restartPolicy: Never
+      containers:
+        - name: qdrant-init
+          image: ghcr.io/homel-dev/memory-steward/tooling:latest
+          command: ["bash", "/opt/tooling/init_qdrant.sh", "ensure"]
+          env:
+            - {name: QDRANT_URL, value: "http://qdrant:6333"}
+            - {name: QDRANT_COLLECTION, value: homel_memory}

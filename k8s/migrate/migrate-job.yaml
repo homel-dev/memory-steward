@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: memory-schema-migrate
+  namespace: ms
+  annotations:
+    kustomize.toolkit.fluxcd.io/force: Enabled
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 1200
+  template:
+    spec:
+      serviceAccountName: memory-tooling
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ghcr.io/homel-dev/memory-steward/tooling:latest
+          command: ["bash", "/opt/tooling/migrate.sh", "up"]
+          env:
+            - {name: PGHOST, value: postgres}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef: {name: homel-postgres, key: POSTGRES_USER}
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef: {name: homel-postgres, key: POSTGRES_PASSWORD}
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef: {name: homel-postgres, key: POSTGRES_DB}

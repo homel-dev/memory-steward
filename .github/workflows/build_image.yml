@@ -192,6 +192,26 @@ jobs:
                   )
           kustomization.write_text(text)
 
+          # Completed migration/restore Jobs are recreated on each tooling
+          # image promotion. They must use the same baked migration version.
+          for stage in ("restore", "migrate"):
+              kustomization = Path(f"k8s/{stage}/kustomization.yml")
+              text = kustomization.read_text()
+              name = f"{prefix}/tooling"
+              pattern = re.compile(
+                  rf"(^  - name: {re.escape(name)}\n)"
+                  r"    (?:newTag|digest): [^\n]+\n",
+                  re.MULTILINE,
+              )
+              text, count = pattern.subn(
+                  rf"\1    digest: {pins['tooling']}\n", text
+              )
+              if count != 1:
+                  raise SystemExit(
+                      f"expected one tooling image pin in {kustomization}, got {count}"
+                  )
+              kustomization.write_text(text)
+
           runtime_contract = Path("k8s/runtime-contract.yaml")
           text = runtime_contract.read_text()
           worker_image = f'{prefix}/memory-steward@{pins["memory-steward"]}'
@@ -208,13 +228,13 @@ jobs:
           runtime_contract.write_text(text)
           PY
 
-          if git diff --quiet -- k8s/kustomization.yml k8s/runtime-contract.yaml; then
+          if git diff --quiet -- k8s/kustomization.yml k8s/runtime-contract.yaml k8s/restore/kustomization.yml k8s/migrate/kustomization.yml; then
             echo "GitOps manifests already reference the published runtime image digests"
             exit 0
           fi
           git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add k8s/kustomization.yml k8s/runtime-contract.yaml
+          git add k8s/kustomization.yml k8s/runtime-contract.yaml k8s/restore/kustomization.yml k8s/migrate/kustomization.yml
           git commit -m "chore(memory-steward): promote runtime images ${GITHUB_SHA::12}"
           git push origin HEAD:main

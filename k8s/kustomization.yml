@@ -2,10 +2,6 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - namespace.yaml
-  - postgres-conn.yaml
-  - postgres.yaml
-  - qdrant.yaml
   - hf-cache-pvc.yaml
   - embeddings.yaml
   - memory-router.yaml
@@ -18,8 +14,6 @@ resources:
   - open-webui.yml
   - runtime-contract.yaml
   - ingress.yaml
-  - tooling/serviceaccount.yaml
-  - backup/backups-pvc.yaml
   - backup/backup-cronjob.yaml
   - alloy
   - oco-consumer
