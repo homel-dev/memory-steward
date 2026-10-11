@@ -1,0 +1,126 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: memory-steward-dashboard-codegraph
+  namespace: ms
+  labels:
+    grafana_dashboard: '1'
+data:
+  memory-steward-codegraph.json: |-
+    {
+      "uid": "ms-codegraph",
+      "title": "Memory Steward / CodeGraph Builds",
+      "description": "Flux artifact ingress, PostgreSQL build state, Argo workflow execution, and CodeGraph generation publication. Metrics and logs come only from OCO.",
+      "tags": ["memory-steward", "codegraph", "argo", "flux"],
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": false,
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": {"from": "now-6h", "to": "now"},
+      "links": [{"type": "link", "title": "Memory Steward Overview", "url": "/d/ms-overview/memory-steward-overview", "includeVars": false, "keepTime": true}],
+      "panels": [
+        {
+          "id": 1, "title": "Controller scrape", "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "up{project=\"memory-steward\",service=\"codegraph-controller\"}", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "none", "mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 2, "title": "Received / queued", "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum(memory_steward_codegraph_builds{state=\"received\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 3, "title": "Submitted / running", "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum(memory_steward_codegraph_builds{state=~\"submitted|running\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 4, "title": "Succeeded (all time)", "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum(memory_steward_codegraph_builds{state=\"succeeded\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 5, "title": "Failed (all time)", "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum(memory_steward_codegraph_builds{state=\"failed\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 6, "title": "Superseded (all time)", "type": "stat",
+          "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum(memory_steward_codegraph_builds{state=\"superseded\"})", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 7, "title": "Durable build states", "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum by (state) (memory_steward_codegraph_builds)", "legendFormat": "{{state}}"}],
+          "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 8, "title": "Flux ingress outcomes / sec", "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum by (outcome) (rate(memory_steward_codegraph_events_total[5m]))", "legendFormat": "{{outcome}}"}],
+          "fieldConfig": {"defaults": {"unit": "ops", "min": 0}, "overrides": []},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        },
+        {
+          "id": 9, "title": "Oldest active build age", "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 12},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "memory_steward_codegraph_oldest_active_age_seconds", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 10, "title": "Latest successful build age", "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 12},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "(time() - memory_steward_codegraph_last_succeeded_timestamp_seconds) and on() (memory_steward_codegraph_last_succeeded_timestamp_seconds > 0)", "instant": true}],
+          "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
+        },
+        {
+          "id": 11, "title": "Worker duration p95", "type": "timeseries",
+          "gridPos": {"h": 4, "w": 12, "x": 12, "y": 12},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(memory_steward_codegraph_worker_duration_seconds_bucket[30m])))", "legendFormat": "p95"}],
+          "fieldConfig": {"defaults": {"unit": "s", "min": 0}, "overrides": []}
+        },
+        {
+          "id": 12, "title": "CodeGraph controller log lines / sec", "type": "timeseries",
+          "gridPos": {"h": 7, "w": 12, "x": 0, "y": 16},
+          "datasource": {"type": "victoriametrics-logs-datasource", "uid": "victorialogs"},
+          "targets": [{"refId": "A", "editorMode": "code", "queryType": "statsRange", "expr": "namespace:=\"ms\" service:=\"controller\" | stats () rate()", "legendFormat": "log lines/s"}],
+          "fieldConfig": {"defaults": {"unit": "ops", "min": 0}, "overrides": []}
+        },
+        {
+          "id": 13, "title": "Worker and controller transitions / sec", "type": "timeseries",
+          "gridPos": {"h": 7, "w": 12, "x": 12, "y": 16},
+          "datasource": {"type": "prometheus", "uid": "victoriametrics"},
+          "targets": [{"refId": "A", "expr": "sum by (operation, outcome) (rate(memory_steward_codegraph_workflow_operations_total[5m]))", "legendFormat": "{{operation}} / {{outcome}}"}],
+          "fieldConfig": {"defaults": {"unit": "ops", "min": 0}, "overrides": []},
+          "options": {"legend": {"displayMode": "list", "placement": "bottom"}}
+        }
+      ]
+    }

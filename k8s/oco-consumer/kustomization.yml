@@ -5,3 +5,4 @@ resources:
   - rbac.yml
   - configmap-datasource.yml
   - configmap-dashboards.yml
+  - configmap-codegraph-dashboard.yml

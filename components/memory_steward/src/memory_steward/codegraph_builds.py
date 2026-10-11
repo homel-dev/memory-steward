@@ -60,6 +60,14 @@ class RecordResult:
     inserted: bool
 
 
+@dataclass(frozen=True)
+class BuildTelemetrySnapshot:
+    counts: dict[str, int]
+    last_received_timestamp: float
+    last_succeeded_timestamp: float
+    oldest_active_age_seconds: float
+
+
 class CodeGraphBuildStore:
     def __init__(self, dsn: str, *, notify_channel: str = DEFAULT_BUILD_NOTIFY_CHANNEL):
         self._dsn = dsn
@@ -74,6 +82,29 @@ class CodeGraphBuildStore:
 
     def notification_connection(self):
         return self._connect(autocommit=True)
+
+    def telemetry_snapshot(self) -> BuildTelemetrySnapshot:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("SELECT state, count(*) FROM codegraph_builds GROUP BY state")
+            counts = {str(state): int(count) for state, count in cur.fetchall()}
+            cur.execute(
+                """
+                SELECT
+                  COALESCE(EXTRACT(EPOCH FROM MAX(received_at)), 0),
+                  COALESCE(EXTRACT(EPOCH FROM MAX(finished_at) FILTER (WHERE state = 'succeeded')), 0),
+                  COALESCE(EXTRACT(EPOCH FROM now() - (
+                    MIN(received_at) FILTER (WHERE state IN ('received', 'submitted', 'running'))
+                  )), 0)
+                FROM codegraph_builds
+                """
+            )
+            received, succeeded, age = cur.fetchone()
+        return BuildTelemetrySnapshot(
+            counts=counts,
+            last_received_timestamp=float(received),
+            last_succeeded_timestamp=float(succeeded),
+            oldest_active_age_seconds=max(float(age), 0.0),
+        )
 
     @staticmethod
     def _row(row: tuple[Any, ...]) -> BuildRecord:

@@ -85,6 +85,8 @@ Telemetry SHOULD store bounded operational metadata and error summaries, not raw
 - Memory Steward publishes Grafana datasource/dashboard ConfigMaps for OCO.
 - OCO owns the shared Grafana presentation runtime; Memory Steward does not deploy its own Grafana workload.
 - Namespace-local Alloy collects Memory Steward pod logs, scrapes supported runtime metrics, and forwards telemetry to the shared OCO Alloy gateway.
+- CodeGraph controller exposes `/metrics`: durable `codegraph_builds` state/age/timestamp gauges from PostgreSQL, plus bounded-label ingress/Workflow counters and successful worker duration histogram. Controller and Argo worker logs carry `build_id` and lifecycle stages. CodeGraph's OCO dashboard uses the shared `victoriametrics` and `victorialogs` datasources, not a new local backend.
+- The CodeGraph end-to-end verification and operator commands are in [`10_codegraph_flux_operations.md`](10_codegraph_flux_operations.md). Its `/healthz` endpoint is process liveness, not build pipeline readiness.
 
 [Back to top](#navigation)
 

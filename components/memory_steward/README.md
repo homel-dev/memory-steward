@@ -45,4 +45,6 @@ The same image provides the CodeGraph control-plane and worker process:
 - `python -m memory_steward.codegraph_controller` — exposes `/events/flux`, persists `NewArtifact` events, reconciles the current Flux artifact, submits/observes Argo Workflows, and records the durable result;
 - `python -m memory_steward.codegraph_worker` with `CODEGRAPH_WORKER_MODE=flux-index` — downloads the exact Flux artifact, verifies its digest, performs a full CodeGraph index without requiring `.git`, and publishes a self-contained generation bundle to MinIO.
 
-The controller does not create Kubernetes Jobs directly. The image pins the upstream CodeGraph engine version; serving remains a later lifecycle step after a successful generation build.
+The controller also exposes `GET /metrics` with durable PostgreSQL build-state gauges and ingress/Workflow counters; both controller and worker emit CodeGraph lifecycle log lines with `build_id`. The image pins the upstream CodeGraph engine version; serving remains a later lifecycle step after a successful generation build.
+
+Operator verification, log and metric queries, and the end-to-end evidence checklist are in [`docs/10_codegraph_flux_operations.md`](../../docs/10_codegraph_flux_operations.md).

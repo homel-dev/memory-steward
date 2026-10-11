@@ -118,6 +118,19 @@ prometheus.scrape "memory_steward_mcp" {
   forward_to   = [prometheus.remote_write.oco.receiver]
 }
 
+prometheus.scrape "codegraph_controller" {
+  targets = [
+    {
+      "__address__" = "codegraph-controller:8093",
+      "project"     = "memory-steward",
+      "namespace"   = "ms",
+      "service"     = "codegraph-controller",
+    },
+  ]
+  metrics_path = "/metrics"
+  forward_to   = [prometheus.remote_write.oco.receiver]
+}
+
 otelcol.receiver.otlp "local" {
   grpc {
     endpoint = "0.0.0.0:4317"

@@ -10,10 +10,14 @@ from urllib.parse import urlparse
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import Response
 from psycopg import sql
 
 from memory_steward.argo_workflows import ArgoWorkflowClient
 from memory_steward.codegraph_builds import BuildRecord, CodeGraphBuildStore, FluxArtifactEvent
+from memory_steward.codegraph_metrics import EVENTS, WORKER_DURATION, WORKFLOW_OPERATIONS
+from memory_steward.codegraph_metrics import refresh as refresh_metrics
+from memory_steward.codegraph_metrics import render as render_metrics
 from memory_steward.flux_source import FluxSourceClient, parse_flux_new_artifact
 
 log = logging.getLogger("memory-steward.codegraph-controller")
@@ -161,7 +165,12 @@ class CodeGraphController:
                         f"event={build.artifact_revision}/{build.artifact_digest} "
                         f"current={current.revision}/{current.digest}"
                     )
-                    self.store.mark_superseded(build.build_id, detail)
+                    if self.store.mark_superseded(build.build_id, detail):
+                        WORKFLOW_OPERATIONS.labels(operation="submit", outcome="superseded").inc()
+                        log.info(
+                            "codegraph_event=superseded build_id=%s source=%s/%s revision=%s",
+                            build.build_id, build.source_namespace, build.source_name, build.artifact_revision,
+                        )
                     handled += 1
                     continue
 
@@ -178,7 +187,7 @@ class CodeGraphController:
                     codegraph_version=self.codegraph_version,
                     index_profile=self.index_profile,
                 )
-                self.store.mark_submitted(
+                submitted = self.store.mark_submitted(
                     build_id=build.build_id,
                     artifact_url=current.url,
                     workflow_namespace=workflow.namespace,
@@ -197,18 +206,23 @@ class CodeGraphController:
                     workflow.namespace,
                     workflow.name,
                 )
+                if submitted:
+                    WORKFLOW_OPERATIONS.labels(operation="submit", outcome="succeeded").inc()
                 handled += 1
             except Exception:
                 # Leave the row in received state. The deterministic Workflow name
                 # makes a retry converge if creation succeeded before the DB update.
                 log.exception("failed to reconcile received CodeGraph build build_id=%s", build.build_id)
+                WORKFLOW_OPERATIONS.labels(operation="submit", outcome="error").inc()
         return handled
 
     def _observe_active(self) -> int:
         handled = 0
         for build in self.store.active(limit=self.batch_size):
             if not build.workflow_name:
-                self.store.complete_failure(build_id=build.build_id, detail="active build has no workflow name")
+                if self.store.complete_failure(build_id=build.build_id, detail="active build has no workflow name"):
+                    WORKFLOW_OPERATIONS.labels(operation="observe", outcome="failed").inc()
+                    log.error("codegraph_event=failed build_id=%s reason=missing_workflow_name", build.build_id)
                 handled += 1
                 continue
             try:
@@ -216,26 +230,40 @@ class CodeGraphController:
                 status = workflow.get("status") if isinstance(workflow, dict) else None
                 phase = str(status.get("phase") or "") if isinstance(status, dict) else ""
                 if phase == "Running":
-                    self.store.mark_running(build.build_id)
+                    if self.store.mark_running(build.build_id):
+                        WORKFLOW_OPERATIONS.labels(operation="observe", outcome="running").inc()
+                        log.info("codegraph_event=running build_id=%s workflow=%s", build.build_id, build.workflow_name)
                     handled += 1
                     continue
                 if phase == "Succeeded":
                     result = self._read_result(build)
-                    self.store.complete_success(build_id=build.build_id, result=result)
+                    completed = self.store.complete_success(build_id=build.build_id, result=result)
+                    if completed:
+                        WORKFLOW_OPERATIONS.labels(operation="observe", outcome="succeeded").inc()
+                        if isinstance(result.get("duration_ms"), (int, float)):
+                            WORKER_DURATION.observe(max(float(result["duration_ms"]) / 1000.0, 0.0))
                     log.info(
-                        "CodeGraph build succeeded build_id=%s generation=s3://%s/%s",
+                        "codegraph_event=succeeded build_id=%s workflow=%s generation=s3://%s/%s duration_ms=%s",
                         build.build_id,
+                        build.workflow_name,
                         build.generation_bucket,
                         build.generation_key,
+                        result.get("duration_ms"),
                     )
                     handled += 1
                     continue
                 if phase in {"Failed", "Error"}:
                     message = str(status.get("message") or f"Argo Workflow phase={phase}") if isinstance(status, dict) else phase
-                    self.store.complete_failure(build_id=build.build_id, detail=message)
+                    if self.store.complete_failure(build_id=build.build_id, detail=message):
+                        WORKFLOW_OPERATIONS.labels(operation="observe", outcome="failed").inc()
+                        log.error(
+                            "codegraph_event=failed build_id=%s workflow=%s phase=%s detail=%s",
+                            build.build_id, build.workflow_name, phase, message[:1000],
+                        )
                     handled += 1
             except Exception:
                 log.exception("failed to observe CodeGraph Workflow build_id=%s", build.build_id)
+                WORKFLOW_OPERATIONS.labels(operation="observe", outcome="error").inc()
         return handled
 
     def drain_once(self) -> int:
@@ -269,21 +297,39 @@ def create_app(
     def healthz() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.get("/metrics", include_in_schema=False)
+    def metrics() -> Response:
+        refresh_metrics(store.telemetry_snapshot())
+        payload, content_type = render_metrics()
+        return Response(content=payload, media_type=content_type)
+
     @app.post("/events/flux")
     def flux_event(
         payload: dict[str, Any],
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         if webhook_token and authorization != f"Bearer {webhook_token}":
+            EVENTS.labels(outcome="unauthorized").inc()
             raise HTTPException(status_code=401, detail="invalid Flux webhook token")
         try:
             event = parse_flux_new_artifact(payload)
         except ValueError as exc:
+            EVENTS.labels(outcome="invalid").inc()
+            log.warning("codegraph_event=invalid_flux_event reason=%s", str(exc))
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if event is None:
+            EVENTS.labels(outcome="ignored").inc()
+            log.info("codegraph_event=ignored_flux_event reason=%s", str(payload.get("reason", "missing"))[:80])
             return {"accepted": False, "ignored": True}
 
         result = store.record_event(event)
+        outcome = "accepted" if result.inserted else "duplicate"
+        EVENTS.labels(outcome=outcome).inc()
+        log.info(
+            "codegraph_event=%s build_id=%s source=%s/%s revision=%s digest=%s",
+            outcome, result.build_id, event.source_namespace, event.source_name,
+            event.artifact_revision, event.artifact_digest,
+        )
         return {
             "accepted": result.inserted,
             "duplicate": not result.inserted,
@@ -315,6 +361,7 @@ def main() -> None:
         codegraph_version=os.environ.get("CODEGRAPH_VERSION", "0.20.1"),
         index_profile=os.environ.get("CODEGRAPH_INDEX_PROFILE", "graph-only"),
     )
+    log.info("codegraph_event=controller_start namespace=%s workflow_template=%s", namespace, controller.argo.workflow_template)
     thread = threading.Thread(target=controller.run_forever, name="codegraph-controller-loop", daemon=True)
     thread.start()
 

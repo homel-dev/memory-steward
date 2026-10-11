@@ -172,7 +172,7 @@ Memory Steward owns telemetry semantics and OCO provisioning content. Namespace-
 | memory-steward | Admission/outcome/feedback service | 8090 |
 | memory-steward-mcp | FastMCP internal control/adapter service | 8081 /mcp |
 | memory-steward-list | Optional speech transcription | 8001 |
-| codegraph-controller | Flux NewArtifact ingress + PostgreSQL/Argo CodeGraph build controller | 8093 /healthz + /events/flux |
+| codegraph-controller | Flux NewArtifact ingress + PostgreSQL/Argo CodeGraph build controller | 8093 /healthz + /events/flux + /metrics |
 | embeddings | Resource-bounded dense embedding service | 8000 |
 | reference-ingest-worker | Durable Reference URL ingestion worker | none |
 | Postgres | Structured state/telemetry | 5432 |

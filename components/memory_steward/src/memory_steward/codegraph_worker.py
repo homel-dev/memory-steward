@@ -282,6 +282,10 @@ def _upload_json(client: Any, *, bucket: str, object_key: str, payload: dict[str
 
 def run_flux_index(config: FluxIndexWorkerConfig) -> dict[str, Any]:
     started = time.monotonic()
+    log.info(
+        "codegraph_stage=start build_id=%s source=%s revision=%s digest=%s profile=%s",
+        config.build_id, config.source_ref, config.source_revision, config.source_digest, config.index_profile,
+    )
     client = _minio_client()
     config.work_root.mkdir(parents=True, exist_ok=True)
     config.codegraph_home.mkdir(parents=True, exist_ok=True)
@@ -292,12 +296,20 @@ def run_flux_index(config: FluxIndexWorkerConfig) -> dict[str, Any]:
         extracted = scratch / "source"
 
         _download_flux_artifact(url=config.source_url, destination=source_archive)
+        log.info(
+            "codegraph_stage=downloaded build_id=%s bytes=%s elapsed_ms=%s",
+            config.build_id, source_archive.stat().st_size, int((time.monotonic() - started) * 1000),
+        )
         _verify_flux_digest(source_archive, config.source_digest)
+        log.info("codegraph_stage=digest_verified build_id=%s", config.build_id)
         extract_archive(source_archive, extracted)
         workspace = prepare_snapshot_workspace(extracted, config.work_root / "repo")
+        log.info("codegraph_stage=extracted build_id=%s", config.build_id)
 
         _verify_codegraph_binary(config)
+        log.info("codegraph_stage=indexing build_id=%s version=%s", config.build_id, config.codegraph_version)
         _stdout, stderr = _run_codegraph(config, workspace)
+        log.info("codegraph_stage=indexed build_id=%s elapsed_ms=%s", config.build_id, int((time.monotonic() - started) * 1000))
         if stderr:
             log.debug("CodeGraph stderr tail: %s", stderr[-2000:])
 
@@ -336,6 +348,10 @@ def run_flux_index(config: FluxIndexWorkerConfig) -> dict[str, Any]:
                 "generation-schema-version": str(GENERATION_ARTIFACT_SCHEMA_VERSION),
             },
         )
+        log.info(
+            "codegraph_stage=generation_published build_id=%s bucket=%s key=%s generation_digest=%s",
+            config.build_id, config.generation_bucket, config.generation_key, generation_digest,
+        )
 
         result = {
             "build_id": config.build_id,
@@ -358,6 +374,7 @@ def run_flux_index(config: FluxIndexWorkerConfig) -> dict[str, Any]:
             payload=result,
             scratch=scratch,
         )
+        log.info("codegraph_stage=result_published build_id=%s duration_ms=%s", config.build_id, result["duration_ms"])
         return result
 
 
@@ -538,7 +555,7 @@ def main() -> None:
         try:
             payload = run_flux_index(config)
         except Exception:
-            log.exception("Flux CodeGraph index worker failed")
+            log.exception("codegraph_stage=failed build_id=%s", config.build_id)
             raise
         print(json.dumps(payload, sort_keys=True))
         return
