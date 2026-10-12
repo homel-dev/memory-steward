@@ -49,7 +49,7 @@ def _minio_client():
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError("minio Python package is not installed") from exc
 
-    raw_endpoint = os.environ["MINIO_ENDPOINT"]
+    raw_endpoint = os.environ.get("MINIO_ENDPOINT") or "minio.host-runtime.svc.cluster.local:9000"
     parsed = urlparse(raw_endpoint if "://" in raw_endpoint else f"//{raw_endpoint}")
     endpoint = parsed.netloc or parsed.path
     secure_default = parsed.scheme == "https"
