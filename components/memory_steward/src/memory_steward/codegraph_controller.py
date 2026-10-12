@@ -23,6 +23,19 @@ from memory_steward.flux_source import FluxSourceClient, parse_flux_new_artifact
 log = logging.getLogger("memory-steward.codegraph-controller")
 
 
+class _SuppressSuccessfulHealthz(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] == "/healthz"
+            and args[4] == 200
+        )
+
+
 def _bool_env(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None:
@@ -376,6 +389,7 @@ def main() -> None:
         store,
         webhook_token=os.environ.get("CODEGRAPH_FLUX_WEBHOOK_TOKEN") or None,
     )
+    logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulHealthz())
     uvicorn.run(
         app,
         host="0.0.0.0",

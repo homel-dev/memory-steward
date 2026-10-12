@@ -108,6 +108,25 @@ spec:
         app: codegraph-controller
     spec:
       serviceAccountName: codegraph-controller
+      initContainers:
+        - name: ensure-codegraph-bucket
+          image: ghcr.io/homel-dev/memory-steward/memory-steward:latest
+          imagePullPolicy: Always
+          command:
+            - python
+            - -c
+            - |
+              import os
+              from memory_steward.codegraph_worker import _ensure_bucket, _minio_client
+              bucket = os.environ["CODEGRAPH_GENERATION_BUCKET"]
+              _ensure_bucket(_minio_client(), bucket)
+              print(f"codegraph_event=bucket_ready bucket={bucket}", flush=True)
+          envFrom:
+            - configMapRef:
+                name: homel-runtime-contract
+            - secretRef:
+                name: homel-codegraph
+                optional: true
       containers:
         - name: controller
           image: ghcr.io/homel-dev/memory-steward/memory-steward:latest

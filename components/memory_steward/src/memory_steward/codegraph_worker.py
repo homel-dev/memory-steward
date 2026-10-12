@@ -7,7 +7,9 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -223,18 +225,58 @@ def _run_codegraph(config: IndexWorkerConfig | FluxIndexWorkerConfig, repository
     )
     env = os.environ.copy()
     env["HOME"] = str(config.codegraph_home)
-    result = subprocess.run(
+    identity = (
+        f"build_id={config.build_id}"
+        if isinstance(config, FluxIndexWorkerConfig)
+        else f"registry_id={config.registry_id}"
+    )
+    output_tails: dict[str, deque[str]] = {
+        "stdout": deque(maxlen=32),
+        "stderr": deque(maxlen=32),
+    }
+
+    def relay(stream: Any, source: str) -> None:
+        try:
+            for raw in stream:
+                line = raw.rstrip("\r\n")
+                if line:
+                    log.info("codegraph_stream=%s %s %s", source, identity, line)
+                output_tails[source].append(raw[-4000:])
+        finally:
+            stream.close()
+
+    with subprocess.Popen(
         command,
         cwd=repository_root,
         env=env,
-        check=False,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=config.index_timeout_seconds,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"CodeGraph indexing failed: {result.stderr[-4000:].strip()}")
-    return result.stdout, result.stderr
+        bufsize=1,
+        encoding="utf-8",
+        errors="replace",
+    ) as process:
+        readers = [
+            threading.Thread(target=relay, args=(process.stdout, "stdout"), daemon=True),
+            threading.Thread(target=relay, args=(process.stderr, "stderr"), daemon=True),
+        ]
+        for reader in readers:
+            reader.start()
+        try:
+            returncode = process.wait(timeout=config.index_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
+        finally:
+            for reader in readers:
+                reader.join()
+
+    stdout = "".join(output_tails["stdout"])[-4000:]
+    stderr = "".join(output_tails["stderr"])[-4000:]
+    if returncode != 0:
+        raise RuntimeError(f"CodeGraph indexing failed (exit_code={returncode}): {stderr.strip()}")
+    return stdout, stderr
 
 
 def _download_flux_artifact(*, url: str, destination: Path) -> None:
