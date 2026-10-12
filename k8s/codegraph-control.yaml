@@ -116,10 +116,44 @@ spec:
             - python
             - -c
             - |
+              import faulthandler
               import os
-              from memory_steward.codegraph_worker import _ensure_bucket, _minio_client
+              import socket
+              from urllib.parse import urlparse
+              from memory_steward.codegraph_worker import _minio_client
+
               bucket = os.environ["CODEGRAPH_GENERATION_BUCKET"]
-              _ensure_bucket(_minio_client(), bucket)
+              raw_endpoint = os.environ.get("MINIO_ENDPOINT") or "minio.host-runtime.svc.cluster.local:9000"
+              parsed = urlparse(raw_endpoint if "://" in raw_endpoint else f"//{raw_endpoint}")
+              host = parsed.hostname
+              secure_env = os.environ.get("MINIO_SECURE")
+              secure = parsed.scheme == "https" if secure_env is None else secure_env.strip().lower() in {"1", "true", "yes", "on"}
+              port = parsed.port or (443 if secure else 80)
+
+              print(f"codegraph_event=minio_dns_start host={host}", flush=True)
+              addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+              ips = ",".join(sorted({address[4][0] for address in addresses}))
+              print(f"codegraph_event=minio_dns_ok host={host} ips={ips}", flush=True)
+              print(f"codegraph_event=minio_tcp_start host={host} port={port}", flush=True)
+              with socket.create_connection((host, port), timeout=5):
+                  pass
+              print(f"codegraph_event=minio_tcp_ok host={host} port={port}", flush=True)
+
+              faulthandler.dump_traceback_later(30, repeat=False)
+              client = _minio_client()
+              print(f"codegraph_event=bucket_exists_start bucket={bucket}", flush=True)
+              exists = client.bucket_exists(bucket)
+              print(f"codegraph_event=bucket_exists_done bucket={bucket} exists={exists}", flush=True)
+              if not exists:
+                  print(f"codegraph_event=bucket_create_start bucket={bucket}", flush=True)
+                  try:
+                      client.make_bucket(bucket)
+                  except Exception as exc:
+                      print(f"codegraph_event=bucket_create_error bucket={bucket} error={exc!r}", flush=True)
+                      print(f"codegraph_event=bucket_exists_recheck bucket={bucket}", flush=True)
+                      if not client.bucket_exists(bucket):
+                          raise
+              faulthandler.cancel_dump_traceback_later()
               print(f"codegraph_event=bucket_ready bucket={bucket}", flush=True)
           envFrom:
             - configMapRef:
