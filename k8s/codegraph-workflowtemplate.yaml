@@ -4,6 +4,9 @@ metadata:
   name: codegraph-build
   namespace: ms
 spec:
+  podMetadata:
+    labels:
+      app: codegraph-worker
   serviceAccountName: codegraph-worker
   entrypoint: build
   volumes:
