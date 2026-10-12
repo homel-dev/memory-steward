@@ -31,7 +31,7 @@ class _SuppressSuccessfulHealthz(logging.Filter):
             and isinstance(args, tuple)
             and len(args) == 5
             and args[1] == "GET"
-            and args[2] == "/healthz"
+            and args[2] in {"/healthz", "/metrics"}
             and args[4] == 200
         )
 

@@ -17,6 +17,21 @@ from memory_steward_list.telemetry import record_transcription
 logging.getLogger("multipart").setLevel(logging.WARNING)
 log = logging.getLogger("memory-steward-list.server")
 
+class _SuppressSuccessfulProbeAccess(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] in {"/healthz", "/metrics"}
+            and args[4] == 200
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbeAccess())
+
 app = FastAPI(
     title="Memory Steward LIST",
     version=APP_VERSION,

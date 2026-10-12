@@ -74,6 +74,21 @@ logging.basicConfig(
 )
 log = logging.getLogger("uvicorn.error")
 
+class _SuppressSuccessfulProbeAccess(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] in {"/healthz", "/metrics"}
+            and args[4] == 200
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbeAccess())
+
 telemetry = StewardTelemetryWriter(POSTGRES_DSN)
 
 app = FastAPI(title="homel-memory-steward", version="0.2")

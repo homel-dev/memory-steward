@@ -25,6 +25,21 @@ from memory_steward_mcp.stability_plane import register_stability_tools
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("steward-mcp")
 
+class _SuppressSuccessfulProbeAccess(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] in {"/healthz", "/metrics"}
+            and args[4] == 200
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbeAccess())
+
 # ==============================================================================
 # 1. INITIALIZATION
 # ==============================================================================

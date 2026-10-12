@@ -1,3 +1,4 @@
+import logging
 import os
 from threading import BoundedSemaphore
 from typing import List, Optional
@@ -5,6 +6,21 @@ from typing import List, Optional
 from fastapi import FastAPI, HTTPException
 from fastembed import TextEmbedding
 from pydantic import BaseModel
+
+class _SuppressSuccessfulProbeAccess(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] in {"/healthz", "/metrics"}
+            and args[4] == 200
+        )
+
+
+logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbeAccess())
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "BAAI/bge-small-en-v1.5")
 EMBEDDING_THREADS = int(os.environ.get("EMBEDDING_THREADS", "4"))
