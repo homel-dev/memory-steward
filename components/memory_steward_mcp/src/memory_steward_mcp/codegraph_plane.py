@@ -144,6 +144,10 @@ class CapabilityIssueRequest(BaseModel):
     ttl_seconds: int = Field(default=3600, ge=60, le=86400)
 
 
+class FluxCapabilityIssueRequest(CapabilityIssueRequest):
+    source_ref: str = Field(min_length=1, max_length=1024)
+
+
 class CapabilitySessionStore:
     def __init__(self, postgres_dsn: str):
         self.postgres_dsn = postgres_dsn
@@ -213,6 +217,77 @@ class CapabilitySessionStore:
                 "multiple READY CodeGraph workers match the exact capability identity"
             )
         return self._binding_from_row(rows[0])
+
+    def flux_generation_candidate(
+        self, *, project_id: str, run_id: str, realm: str,
+        repository: str | None, revision: str, source_ref: str,
+    ) -> tuple[CodeGraphBinding, dict[str, Any]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT id::text, artifact_revision, generation_bucket, generation_key, result
+                FROM codegraph_builds
+                WHERE state = 'succeeded'
+                  AND source_api_version || ':' || source_namespace || '/' || source_kind || '/' || source_name = %s
+                  AND split_part(artifact_revision, '@sha1:', 2) = %s
+                  AND generation_bucket IS NOT NULL AND generation_key IS NOT NULL
+                  AND result IS NOT NULL
+                ORDER BY finished_at DESC, id DESC LIMIT 1
+            """, (source_ref, revision))
+            row = cur.fetchone()
+        if row is None:
+            raise CodeGraphUnavailable("no published Flux CodeGraph generation matches source and revision")
+        build_id = str(row[0])
+        result = row[4]
+        if not isinstance(result, dict) or result.get("source_ref") != source_ref or result.get("source_revision") != row[1]:
+            raise CodeGraphUnavailable("Flux CodeGraph generation identity mismatch")
+        if result.get("generation_key") != row[3] or result.get("generation_bucket") != row[2]:
+            raise CodeGraphUnavailable("Flux CodeGraph generation object mismatch")
+        endpoint = f"http://cg-serve-{build_id.replace('-', '')}.ms.svc.cluster.local:8094"
+        return CodeGraphBinding(
+            registry_id=build_id, worker_generation=1, worker_endpoint=endpoint,
+            project_id=project_id, run_id=run_id, realm=realm,
+            repository=repository, revision=revision,
+            codegraph_version=str(result["codegraph_version"]),
+            index_profile=str(result["index_profile"]),
+        ), {"build_id": build_id, "source_ref": source_ref, "bucket": row[2],
+            "key": row[3], "revision": row[1], "result": result}
+
+    def activate_flux_binding(
+        self, *, candidate: CodeGraphBinding, generation: dict[str, Any]
+    ) -> CodeGraphBinding:
+        import json
+        identity = hashlib.sha256(json.dumps([
+            generation["build_id"], candidate.project_id, candidate.run_id,
+            candidate.realm, candidate.repository,
+        ], separators=(",", ":")).encode()).hexdigest()
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO codegraph_registry (
+                    source_identity, source_bucket, source_object_key, source_event_name,
+                    source_metadata, project_id, run_id, realm, repository,
+                    indexed_revision, codegraph_version, index_profile,
+                    worker_id, worker_generation, worker_endpoint, ready, state, ready_at
+                ) VALUES (
+                    %s, %s, %s, 'FluxGenerationPublished', %s::jsonb,
+                    %s, %s, %s, %s, %s, %s, %s, %s, 1, %s, TRUE, 'ready', now()
+                ) ON CONFLICT (source_identity) DO UPDATE SET
+                    worker_endpoint = EXCLUDED.worker_endpoint,
+                    ready = TRUE, state = 'ready', updated_at = now()
+                RETURNING id::text
+            """, (
+                identity, generation["bucket"], generation["key"],
+                json.dumps({"source_ref": generation["source_ref"],
+                            "source_revision": generation["revision"]}),
+                candidate.project_id, candidate.run_id, candidate.realm,
+                candidate.repository, candidate.revision,
+                candidate.codegraph_version, candidate.index_profile,
+                "cg-serve-" + generation["build_id"].replace("-", ""),
+                candidate.worker_endpoint,
+            ))
+            row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("CodeGraph Flux binding insert returned no identity")
+        return CodeGraphBinding(**{**candidate.__dict__, "registry_id": str(row[0])})
 
     def create_session(
         self,
@@ -861,6 +936,61 @@ def register_codegraph_plane(
             },
             status_code=201,
         )
+
+    @mcp.custom_route("/v1/codegraph/flux-capability-sessions", methods=["POST"])
+    async def issue_flux_codegraph_session(request: Request) -> JSONResponse:
+        if not resolved_issuer_token:
+            return JSONResponse({"detail": "CODEGRAPH_SESSION_ISSUER_TOKEN is not configured"}, status_code=503)
+        if not _issuer_authorized(request, resolved_issuer_token):
+            return JSONResponse({"detail": "invalid issuer token"}, status_code=401)
+        try:
+            payload = FluxCapabilityIssueRequest.model_validate(await request.json())
+            realm, revision = resolved_store.validate_identity(
+                realm=payload.realm, revision=payload.revision
+            )
+            candidate, generation = await anyio.to_thread.run_sync(
+                lambda: resolved_store.flux_generation_candidate(
+                    project_id=payload.project_id, run_id=payload.run_id,
+                    realm=realm, repository=payload.repository,
+                    revision=revision, source_ref=payload.source_ref,
+                )
+            )
+            # Probe the real generation before recording a READY binding.
+            descriptors = await router.list_tools(candidate)
+            codegraph_tools = sorted({
+                str(tool["name"]) for tool in descriptors
+                if isinstance(tool.get("name"), str) and tool["name"] in AGENT_CODEGRAPH_TOOLS
+            })
+            if not codegraph_tools:
+                raise CodeGraphUnavailable("Flux CodeGraph serving backend exposes no authorized tools")
+            binding = await anyio.to_thread.run_sync(
+                lambda: resolved_store.activate_flux_binding(candidate=candidate, generation=generation)
+            )
+            authorized_tools = sorted(BASE_AGENT_READ_TOOLS | set(codegraph_tools))
+            session, access_token = await anyio.to_thread.run_sync(
+                lambda: resolved_store.create_session(
+                    binding=binding, role=payload.role, stage=payload.stage,
+                    ttl_seconds=payload.ttl_seconds, authorized_tools=authorized_tools,
+                )
+            )
+        except (ValidationError, ValueError) as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=400)
+        except CodeGraphUnavailable as exc:
+            return JSONResponse({"detail": str(exc)}, status_code=409)
+        except httpx.HTTPError as exc:
+            return JSONResponse({"detail": f"Flux CodeGraph worker unreachable: {exc}"}, status_code=503)
+        return JSONResponse({
+            "capability_session_id": session.capability_session_id,
+            "access_token": access_token,
+            "credential_header": "X-Memory-Capability",
+            "mcp_endpoint": resolved_mcp_endpoint,
+            "project_id": session.project_id, "run_id": session.run_id,
+            "realm": session.realm, "revision": session.revision,
+            "source_ref": payload.source_ref,
+            "capabilities": {"codegraph": {"ready": True, "registry_id": binding.registry_id,
+                                            "tools": codegraph_tools}},
+            "expires_at": session.expires_at.isoformat(),
+        }, status_code=201)
 
     @mcp.custom_route(
         "/v1/codegraph/capability-sessions/{session_id}/release",

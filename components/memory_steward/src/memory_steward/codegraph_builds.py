@@ -183,6 +183,23 @@ class CodeGraphBuildStore:
                 raise RuntimeError("CodeGraph build row disappeared after conflict")
             return RecordResult(build_id=str(existing[0]), inserted=False)
 
+    def successful_generations(self) -> list[dict[str, Any]]:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT id::text, generation_bucket, generation_key, result
+                FROM codegraph_builds
+                WHERE state = 'succeeded'
+                  AND generation_bucket IS NOT NULL
+                  AND generation_key IS NOT NULL
+                  AND result IS NOT NULL
+                ORDER BY finished_at, id
+            """)
+            return [
+                {"build_id": str(row[0]), "generation_bucket": row[1],
+                 "generation_key": row[2], "result": row[3]}
+                for row in cur.fetchall()
+            ]
+
     def pending(self, *, limit: int) -> list[BuildRecord]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(

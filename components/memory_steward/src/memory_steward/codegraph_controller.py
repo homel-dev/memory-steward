@@ -18,6 +18,7 @@ from memory_steward.codegraph_builds import BuildRecord, CodeGraphBuildStore, Fl
 from memory_steward.codegraph_metrics import EVENTS, WORKER_DURATION, WORKFLOW_OPERATIONS
 from memory_steward.codegraph_metrics import refresh as refresh_metrics
 from memory_steward.codegraph_metrics import render as render_metrics
+from memory_steward.codegraph_publisher import CodeGraphPublisher
 from memory_steward.flux_source import FluxSourceClient, parse_flux_new_artifact
 
 log = logging.getLogger("memory-steward.codegraph-controller")
@@ -77,6 +78,7 @@ class CodeGraphController:
         codegraph_version: str = "0.20.1",
         index_profile: str = "graph-only",
         minio_client: Any | None = None,
+        publisher: CodeGraphPublisher | None = None,
     ):
         self.store = store
         self.flux = flux
@@ -88,6 +90,7 @@ class CodeGraphController:
         self.codegraph_version = codegraph_version
         self.index_profile = index_profile
         self._minio = minio_client
+        self.publisher = publisher
 
     @staticmethod
     def _event_from_build(build: BuildRecord) -> FluxArtifactEvent:
@@ -280,7 +283,14 @@ class CodeGraphController:
         return handled
 
     def drain_once(self) -> int:
-        return self._submit_pending() + self._observe_active()
+        handled = self._submit_pending() + self._observe_active()
+        if self.publisher is not None:
+            for build in self.store.successful_generations():
+                try:
+                    self.publisher.ensure(build)
+                except Exception:
+                    log.exception("failed to publish CodeGraph serving endpoint build_id=%s", build["build_id"])
+        return handled
 
     def run_forever(self) -> None:
         self.drain_once()
@@ -379,6 +389,7 @@ def main() -> None:
         idle_poll_seconds=float(os.environ.get("CODEGRAPH_CONTROLLER_POLL_SECONDS", "5")),
         codegraph_version=os.environ.get("CODEGRAPH_VERSION", "0.20.1"),
         index_profile=os.environ.get("CODEGRAPH_INDEX_PROFILE", "graph-only"),
+        publisher=CodeGraphPublisher(namespace=namespace, image=os.environ["CODEGRAPH_WORKER_IMAGE"]),
     )
     log.info("codegraph_event=controller_start namespace=%s workflow_template=%s", namespace, controller.argo.workflow_template)
     thread = threading.Thread(target=controller.run_forever, name="codegraph-controller-loop", daemon=True)
