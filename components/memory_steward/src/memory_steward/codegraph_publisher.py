@@ -94,7 +94,40 @@ class CodeGraphPublisher:
         self._create(self.core.create_namespaced_service, service, self.namespace)
         self._create(self.apps.create_namespaced_deployment, deployment, self.namespace)
         deployed = self.apps.read_namespaced_deployment(name, self.namespace)
-        if not deployed.status or not deployed.status.ready_replicas:
+        serving_container = next(
+            (item for item in deployed.spec.template.spec.containers
+             if item.name == "serve"),
+            None,
+        )
+        if serving_container is None:
+            raise RuntimeError(f"CodeGraph Deployment {name} has no serve container")
+        if serving_container.image != self.image:
+            # A create-only reconcile leaves existing serving Pods on old images.
+            # Update the Pod template; Kubernetes rolls the Deployment safely.
+            self.apps.patch_namespaced_deployment(
+                name,
+                self.namespace,
+                {"spec": {"template": {"spec": {
+                    "containers": [{"name": "serve", "image": self.image}]
+                }}}},
+            )
+            log.info(
+                "codegraph_event=serving_image_updated build_id=%s",
+                build["build_id"],
+            )
+            return None
+
+        status = deployed.status
+        replicas = deployed.spec.replicas or 1
+        if (
+            status is None
+            or (status.observed_generation or 0) < (deployed.metadata.generation or 0)
+            or (status.updated_replicas or 0) < replicas
+            or (status.ready_replicas or 0) < replicas
+            or (status.replicas or 0) > replicas
+        ):
+            # An old ReplicaSet may still be Ready during a rollout; don't
+            # switch repository:latest until the new template is fully Ready.
             return None
 
         repository = str(build["repository"])
