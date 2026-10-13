@@ -19,6 +19,19 @@ from memory_steward.codegraph_registry import (
 log = logging.getLogger("memory-steward.codegraph-listener")
 
 
+class _SuppressSuccessfulProbes(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] in {"/healthz", "/metrics"}
+            and args[4] == 200
+        )
+
+
 def _csv_set(name: str) -> set[str]:
     return {value.strip() for value in os.environ.get(name, "").split(",") if value.strip()}
 
@@ -164,4 +177,5 @@ app = create_app()
 
 if __name__ == "__main__":
     port = int(os.environ.get("CODEGRAPH_LISTENER_PORT", "8092"))
+    logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbes())
     uvicorn.run("memory_steward.codegraph_listener:app", host="0.0.0.0", port=port)

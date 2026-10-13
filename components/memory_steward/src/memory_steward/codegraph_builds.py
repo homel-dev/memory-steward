@@ -186,19 +186,66 @@ class CodeGraphBuildStore:
     def successful_generations(self) -> list[dict[str, Any]]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute("""
-                SELECT id::text, generation_bucket, generation_key, result
-                FROM codegraph_builds
-                WHERE state = 'succeeded'
-                  AND generation_bucket IS NOT NULL
-                  AND generation_key IS NOT NULL
-                  AND result IS NOT NULL
-                ORDER BY finished_at, id
+                SELECT b.id::text, b.generation_bucket, b.generation_key,
+                       b.result, b.source_name,
+                       ARRAY(
+                         SELECT previous.id::text
+                         FROM codegraph_builds previous
+                         WHERE previous.source_namespace = b.source_namespace
+                           AND previous.source_kind = b.source_kind
+                           AND previous.source_name = b.source_name
+                           AND previous.id <> b.id
+                           AND previous.state = 'succeeded'
+                       )
+                FROM codegraph_builds b
+                WHERE b.state = 'succeeded'
+                  AND b.generation_bucket IS NOT NULL
+                  AND b.generation_key IS NOT NULL
+                  AND b.result IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM codegraph_builds newer
+                    WHERE newer.source_namespace = b.source_namespace
+                      AND newer.source_kind = b.source_kind
+                      AND newer.source_name = b.source_name
+                      AND (newer.received_at, newer.id) > (b.received_at, b.id)
+                  )
+                ORDER BY b.source_namespace, b.source_name
             """)
             return [
                 {"build_id": str(row[0]), "generation_bucket": row[1],
-                 "generation_key": row[2], "result": row[3]}
+                 "generation_key": row[2], "result": row[3],
+                 "repository": row[4], "previous_build_ids": row[5]}
                 for row in cur.fetchall()
             ]
+
+    def activate_serving_alias(self, build: dict[str, Any], endpoint: str) -> bool:
+        """Record the READY generation only if it remains the newest Flux event."""
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT build_id::text, worker_endpoint
+                FROM codegraph_serving_aliases WHERE repository = %s
+            """, (build["repository"],))
+            if cur.fetchone() == (build["build_id"], endpoint):
+                return True
+            cur.execute("""
+                INSERT INTO codegraph_serving_aliases (repository, build_id, worker_endpoint)
+                SELECT b.source_name, b.id, %s
+                FROM codegraph_builds b
+                WHERE b.id = %s::uuid AND b.state = 'succeeded'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM codegraph_builds newer
+                    WHERE newer.source_namespace = b.source_namespace
+                      AND newer.source_kind = b.source_kind
+                      AND newer.source_name = b.source_name
+                      AND (newer.received_at, newer.id) > (b.received_at, b.id)
+                  )
+                ON CONFLICT (repository) DO UPDATE SET
+                    build_id = EXCLUDED.build_id,
+                    worker_endpoint = EXCLUDED.worker_endpoint,
+                    updated_at = now()
+                RETURNING repository
+            """, (endpoint, build["build_id"]))
+            return cur.fetchone() is not None
 
     def pending(self, *, limit: int) -> list[BuildRecord]:
         with self._connect() as conn, conn.cursor() as cur:

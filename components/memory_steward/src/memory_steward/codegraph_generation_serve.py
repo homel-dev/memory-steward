@@ -21,6 +21,19 @@ from memory_steward.codegraph_state import (
 log = logging.getLogger("memory-steward.codegraph-generation-serve")
 
 
+class _SuppressSuccessfulProbes(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (
+            record.name == "uvicorn.access"
+            and isinstance(args, tuple)
+            and len(args) == 5
+            and args[1] == "GET"
+            and args[2] in {"/healthz", "/metrics"}
+            and args[4] == 200
+        )
+
+
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     bucket = os.environ["CODEGRAPH_GENERATION_BUCKET"]
@@ -79,6 +92,7 @@ def main() -> None:
         tools = client.initialize()
         log.info("codegraph_stage=serving source=%s revision=%s tools=%s", source_ref, revision, len(tools))
         app = create_adapter_app(client, proxy_token=os.environ.get("CODEGRAPH_WORKER_PROXY_TOKEN") or None)
+        logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbes())
         uvicorn.run(app, host="0.0.0.0", port=8094, log_level="info")
     finally:
         client.close()

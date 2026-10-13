@@ -287,7 +287,9 @@ class CodeGraphController:
         if self.publisher is not None:
             for build in self.store.successful_generations():
                 try:
-                    self.publisher.ensure(build)
+                    endpoint = self.publisher.ensure(build)
+                    if endpoint and self.store.activate_serving_alias(build, endpoint):
+                        self.publisher.prune(build)
                 except Exception:
                     log.exception("failed to publish CodeGraph serving endpoint build_id=%s", build["build_id"])
         return handled

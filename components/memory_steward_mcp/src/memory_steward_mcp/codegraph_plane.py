@@ -17,7 +17,7 @@ import time
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 import anyio
 import httpx
@@ -38,6 +38,8 @@ log = logging.getLogger("steward-mcp.codegraph")
 
 CAPABILITY_HEADER = "x-memory-capability"
 TOKEN_PREFIX = "mscs_"
+MEMORY_READ = "memory.read"
+MEMORY_WRITE = "memory.write"
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 REALMS = frozenset({"workspace", "oracle", "candidate"})
 
@@ -145,7 +147,9 @@ class CapabilityIssueRequest(BaseModel):
 
 
 class FluxCapabilityIssueRequest(CapabilityIssueRequest):
-    source_ref: str = Field(min_length=1, max_length=1024)
+    revision: str | None = None
+    source_ref: str | None = Field(default=None, max_length=1024)
+    selector: Literal["latest", "revision"] | None = None
 
 
 class CapabilitySessionStore:
@@ -236,11 +240,11 @@ class CapabilitySessionStore:
             row = cur.fetchone()
         if row is None:
             raise CodeGraphUnavailable("no published Flux CodeGraph generation matches source and revision")
-        build_id = str(row[0])
-        result = row[4]
-        if not isinstance(result, dict) or result.get("source_ref") != source_ref or result.get("source_revision") != row[1]:
+        build_id = str(row["id"])
+        result = row["result"]
+        if not isinstance(result, dict) or result.get("source_ref") != source_ref or result.get("source_revision") != row["artifact_revision"]:
             raise CodeGraphUnavailable("Flux CodeGraph generation identity mismatch")
-        if result.get("generation_key") != row[3] or result.get("generation_bucket") != row[2]:
+        if result.get("generation_key") != row["generation_key"] or result.get("generation_bucket") != row["generation_bucket"]:
             raise CodeGraphUnavailable("Flux CodeGraph generation object mismatch")
         endpoint = f"http://cg-serve-{build_id.replace('-', '')}.ms.svc.cluster.local:8094"
         return CodeGraphBinding(
@@ -249,8 +253,43 @@ class CapabilitySessionStore:
             repository=repository, revision=revision,
             codegraph_version=str(result["codegraph_version"]),
             index_profile=str(result["index_profile"]),
-        ), {"build_id": build_id, "source_ref": source_ref, "bucket": row[2],
-            "key": row[3], "revision": row[1], "result": result}
+        ), {"build_id": build_id, "source_ref": source_ref, "bucket": row["generation_bucket"],
+            "key": row["generation_key"], "revision": row["artifact_revision"], "result": result}
+
+    def latest_serving_candidate(
+        self, *, project_id: str, run_id: str, realm: str, repository: str
+    ) -> tuple[CodeGraphBinding, dict[str, Any]]:
+        normalized = repository.rsplit("/", 1)[-1]
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT b.id::text AS build_id, b.artifact_revision,
+                       b.generation_bucket, b.generation_key, b.result,
+                       a.worker_endpoint
+                FROM codegraph_serving_aliases a
+                JOIN codegraph_builds b ON b.id = a.build_id
+                WHERE a.repository = %s AND b.state = 'succeeded'
+            """, (normalized,))
+            row = cur.fetchone()
+        if row is None:
+            raise CodeGraphUnavailable("no READY CodeGraph serving alias for repository")
+        result = row["result"]
+        if (not isinstance(result, dict)
+                or result.get("generation_key") != row["generation_key"]
+                or result.get("generation_bucket") != row["generation_bucket"]):
+            raise CodeGraphUnavailable("READY CodeGraph alias has invalid generation metadata")
+        revision = str(row["artifact_revision"]).split("@sha1:")[-1]
+        realm, revision = self.validate_identity(realm=realm, revision=revision)
+        source_ref = str(result["source_ref"])
+        build_id = str(row["build_id"])
+        return CodeGraphBinding(
+            registry_id=build_id, worker_generation=1,
+            worker_endpoint=str(row["worker_endpoint"]), project_id=project_id,
+            run_id=run_id, realm=realm, repository=normalized, revision=revision,
+            codegraph_version=str(result["codegraph_version"]),
+            index_profile=str(result["index_profile"]),
+        ), {"build_id": build_id, "source_ref": source_ref,
+            "bucket": row["generation_bucket"], "key": row["generation_key"],
+            "revision": row["artifact_revision"], "result": result}
 
     def activate_flux_binding(
         self, *, candidate: CodeGraphBinding, generation: dict[str, Any]
@@ -287,7 +326,7 @@ class CapabilitySessionStore:
             row = cur.fetchone()
         if row is None:
             raise RuntimeError("CodeGraph Flux binding insert returned no identity")
-        return CodeGraphBinding(**{**candidate.__dict__, "registry_id": str(row[0])})
+        return CodeGraphBinding(**{**candidate.__dict__, "registry_id": str(row["id"])})
 
     def create_session(
         self,
@@ -297,6 +336,7 @@ class CapabilitySessionStore:
         stage: str | None,
         ttl_seconds: int,
         authorized_tools: Sequence[str],
+        revision_selector: str | None = None,
     ) -> tuple[CapabilitySession, str]:
         tools = tuple(sorted(set(authorized_tools)))
         if not tools:
@@ -345,7 +385,7 @@ class CapabilitySessionStore:
                     binding.run_id,
                     binding.realm,
                     binding.repository,
-                    binding.revision,
+                    revision_selector or binding.revision,
                     role,
                     stage,
                     list(tools),
@@ -404,6 +444,17 @@ class CapabilitySessionStore:
         return self._session_from_row(row)
 
     def resolve_backend(self, session: CapabilitySession) -> CodeGraphBinding:
+        if session.revision == "latest":
+            if not session.repository:
+                raise CodeGraphUnavailable("latest capability has no repository")
+            current, _ = self.latest_serving_candidate(
+                project_id=session.project_id, run_id=session.run_id,
+                realm=session.realm, repository=session.repository,
+            )
+            # The session registry ID remains the authorization and telemetry FK.
+            return CodeGraphBinding(**{
+                **current.__dict__, "registry_id": session.codegraph_registry_id,
+            })
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -890,7 +941,7 @@ def register_codegraph_plane(
             )
             if not codegraph_tools:
                 raise CodeGraphUnavailable("READY CodeGraph worker exposes no authorized query tools")
-            authorized_tools = sorted(BASE_AGENT_READ_TOOLS | set(codegraph_tools))
+            authorized_tools = sorted(BASE_AGENT_READ_TOOLS | set(codegraph_tools) | {MEMORY_READ})
             session, access_token = await anyio.to_thread.run_sync(
                 lambda: resolved_store.create_session(
                     binding=binding,
@@ -945,16 +996,33 @@ def register_codegraph_plane(
             return JSONResponse({"detail": "invalid issuer token"}, status_code=401)
         try:
             payload = FluxCapabilityIssueRequest.model_validate(await request.json())
-            realm, revision = resolved_store.validate_identity(
-                realm=payload.realm, revision=payload.revision
+            latest = payload.selector == "latest" or (
+                payload.selector is None and payload.revision is None
             )
-            candidate, generation = await anyio.to_thread.run_sync(
-                lambda: resolved_store.flux_generation_candidate(
-                    project_id=payload.project_id, run_id=payload.run_id,
-                    realm=realm, repository=payload.repository,
-                    revision=revision, source_ref=payload.source_ref,
+            if latest:
+                if not payload.repository:
+                    raise ValueError("repository is required for latest CodeGraph")
+                candidate, generation = await anyio.to_thread.run_sync(
+                    lambda: resolved_store.latest_serving_candidate(
+                        project_id=payload.project_id, run_id=payload.run_id,
+                        realm=payload.realm, repository=payload.repository,
+                    )
                 )
-            )
+                revision_selector = "latest"
+            else:
+                if not payload.source_ref:
+                    raise ValueError("source_ref is required for exact revision")
+                realm, revision = resolved_store.validate_identity(
+                    realm=payload.realm, revision=payload.revision or ""
+                )
+                candidate, generation = await anyio.to_thread.run_sync(
+                    lambda: resolved_store.flux_generation_candidate(
+                        project_id=payload.project_id, run_id=payload.run_id,
+                        realm=realm, repository=payload.repository,
+                        revision=revision, source_ref=payload.source_ref,
+                    )
+                )
+                revision_selector = None
             # Probe the real generation before recording a READY binding.
             descriptors = await router.list_tools(candidate)
             codegraph_tools = sorted({
@@ -966,11 +1034,12 @@ def register_codegraph_plane(
             binding = await anyio.to_thread.run_sync(
                 lambda: resolved_store.activate_flux_binding(candidate=candidate, generation=generation)
             )
-            authorized_tools = sorted(BASE_AGENT_READ_TOOLS | set(codegraph_tools))
+            authorized_tools = sorted(BASE_AGENT_READ_TOOLS | set(codegraph_tools) | {MEMORY_READ})
             session, access_token = await anyio.to_thread.run_sync(
                 lambda: resolved_store.create_session(
                     binding=binding, role=payload.role, stage=payload.stage,
                     ttl_seconds=payload.ttl_seconds, authorized_tools=authorized_tools,
+                    revision_selector=revision_selector,
                 )
             )
         except (ValidationError, ValueError) as exc:
@@ -986,7 +1055,8 @@ def register_codegraph_plane(
             "mcp_endpoint": resolved_mcp_endpoint,
             "project_id": session.project_id, "run_id": session.run_id,
             "realm": session.realm, "revision": session.revision,
-            "source_ref": payload.source_ref,
+            "source_ref": generation["source_ref"],
+            "permissions": [MEMORY_READ],
             "capabilities": {"codegraph": {"ready": True, "registry_id": binding.registry_id,
                                             "tools": codegraph_tools}},
             "expires_at": session.expires_at.isoformat(),

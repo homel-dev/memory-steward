@@ -9,6 +9,12 @@ spec:
       app: codegraph-worker
   serviceAccountName: codegraph-worker
   entrypoint: build
+  ttlStrategy:
+    secondsAfterSuccess: 3600
+    secondsAfterFailure: 86400
+    secondsAfterError: 86400
+  podGC:
+    strategy: OnWorkflowCompletion
   volumes:
     - name: workspace
       emptyDir: {}
