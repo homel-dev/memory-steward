@@ -13,6 +13,81 @@ spec:
       labels:
         app: memory-steward-mcp
     spec:
+      serviceAccountName: memory-steward-mcp
+      automountServiceAccountToken: false
+      volumes:
+        - name: issuer-kube-api
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+      initContainers:
+        - name: ensure-codegraph-issuer
+          image: ghcr.io/homel-dev/memory-steward/memory-steward:latest
+          imagePullPolicy: Always
+          command: ["python", "-c"]
+          args:
+            - |
+              import base64
+              import os
+              import secrets
+
+              from kubernetes import client, config
+              from kubernetes.client.exceptions import ApiException
+
+              namespace = os.environ["POD_NAMESPACE"]
+              name = "codegraph-session-issuer"
+              key = "CODEGRAPH_SESSION_ISSUER_TOKEN"
+              config.load_incluster_config()
+              api = client.CoreV1Api()
+
+              def validate(existing):
+                  encoded = (existing.data or {}).get(key)
+                  if not encoded:
+                      raise RuntimeError(f"{namespace}/{name} has no {key}; refusing to rotate")
+                  token = base64.b64decode(encoded, validate=True)
+                  if len(token) < 48:
+                      raise RuntimeError(f"{namespace}/{name} has an invalid {key}; refusing to rotate")
+                  print("codegraph_event=issuer_secret_ready status=existing", flush=True)
+
+              try:
+                  existing = api.read_namespaced_secret(name=name, namespace=namespace)
+              except ApiException as exc:
+                  if exc.status != 404:
+                      raise
+                  token = secrets.token_urlsafe(48)
+                  secret = client.V1Secret(
+                      api_version="v1",
+                      kind="Secret",
+                      metadata=client.V1ObjectMeta(name=name, namespace=namespace),
+                      type="Opaque",
+                      immutable=True,
+                      data={key: base64.b64encode(token.encode("ascii")).decode("ascii")},
+                  )
+                  try:
+                      api.create_namespaced_secret(namespace=namespace, body=secret)
+                      print("codegraph_event=issuer_secret_ready status=created", flush=True)
+                  except ApiException as race:
+                      if race.status != 409:
+                          raise
+                      validate(api.read_namespaced_secret(name=name, namespace=namespace))
+              else:
+                  validate(existing)
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          volumeMounts:
+            - name: issuer-kube-api
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
       containers:
         - name: mcp
           image: ghcr.io/homel-dev/memory-steward/memory-steward-mcp:latest
@@ -31,6 +106,11 @@ spec:
 
           # 2. Diagnostics Plane Access (Postgres)
           env:
+            - name: CODEGRAPH_SESSION_ISSUER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: codegraph-session-issuer
+                  key: CODEGRAPH_SESSION_ISSUER_TOKEN
             - name: POSTGRES_DSN
               valueFrom:
                 secretKeyRef:

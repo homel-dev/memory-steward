@@ -1,0 +1,37 @@
+# Restrict CodeGraph issuer Secret provisioning to the Memory Steward MCP pod.
+# Only the initContainer receives a Kubernetes API token.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: memory-steward-mcp
+  namespace: ms
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: codegraph-session-issuer-bootstrap
+  namespace: ms
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["codegraph-session-issuer"]
+    verbs: ["get"]
+  # Kubernetes RBAC cannot scope 'create' by resourceNames; this permission is
+  # confined to the MCP ServiceAccount; only its initContainer receives a JWT.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: codegraph-session-issuer-bootstrap
+  namespace: ms
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: codegraph-session-issuer-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: memory-steward-mcp
+    namespace: ms

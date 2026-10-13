@@ -6,6 +6,7 @@ resources:
   - embeddings.yaml
   - memory-router.yaml
   - memory-steward.yaml
+  - codegraph-session-issuer-bootstrap.yaml
   - memory-steward-mcp.yaml
   - reference-ingest-worker.yaml
   - memory-steward-list.yaml
