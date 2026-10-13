@@ -207,6 +207,10 @@ class CodeGraphBuildStore:
                     WHERE newer.source_namespace = b.source_namespace
                       AND newer.source_kind = b.source_kind
                       AND newer.source_name = b.source_name
+                      AND newer.state = 'succeeded'
+                      AND newer.generation_bucket IS NOT NULL
+                      AND newer.generation_key IS NOT NULL
+                      AND newer.result IS NOT NULL
                       AND (newer.received_at, newer.id) > (b.received_at, b.id)
                   )
                 ORDER BY b.source_namespace, b.source_name
@@ -237,6 +241,10 @@ class CodeGraphBuildStore:
                     WHERE newer.source_namespace = b.source_namespace
                       AND newer.source_kind = b.source_kind
                       AND newer.source_name = b.source_name
+                      AND newer.state = 'succeeded'
+                      AND newer.generation_bucket IS NOT NULL
+                      AND newer.generation_key IS NOT NULL
+                      AND newer.result IS NOT NULL
                       AND (newer.received_at, newer.id) > (b.received_at, b.id)
                   )
                 ON CONFLICT (repository) DO UPDATE SET

@@ -93,7 +93,7 @@ def main() -> None:
         log.info("codegraph_stage=serving source=%s revision=%s tools=%s", source_ref, revision, len(tools))
         app = create_adapter_app(client, proxy_token=os.environ.get("CODEGRAPH_WORKER_PROXY_TOKEN") or None)
         logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbes())
-        uvicorn.run(app, host="0.0.0.0", port=8094, log_level="info")
+        uvicorn.run(app, host="0.0.0.0", port=8094, log_level="info", access_log=False)
     finally:
         client.close()
 

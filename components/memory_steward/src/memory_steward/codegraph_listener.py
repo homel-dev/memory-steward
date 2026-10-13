@@ -178,4 +178,4 @@ app = create_app()
 if __name__ == "__main__":
     port = int(os.environ.get("CODEGRAPH_LISTENER_PORT", "8092"))
     logging.getLogger("uvicorn.access").addFilter(_SuppressSuccessfulProbes())
-    uvicorn.run("memory_steward.codegraph_listener:app", host="0.0.0.0", port=port)
+    uvicorn.run("memory_steward.codegraph_listener:app", host="0.0.0.0", port=port, access_log=False)

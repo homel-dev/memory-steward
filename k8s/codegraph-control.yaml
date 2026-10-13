@@ -33,7 +33,7 @@ rules:
     verbs: ["create", "get"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    verbs: ["create", "get", "delete"]
+    verbs: ["create", "get", "patch", "delete"]
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["create", "get", "patch", "delete"]
