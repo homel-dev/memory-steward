@@ -60,6 +60,14 @@ class ArgoWorkflowClient:
             },
             "spec": {
                 "workflowTemplateRef": {"name": self.workflow_template},
+                "podGC": {
+                    "strategy": "OnWorkflowCompletion",
+                },
+                "ttlStrategy": {
+                    "secondsAfterSuccess": 3600,
+                    "secondsAfterFailure": 86400,
+                    "secondsAfterCompletion": 86400,
+                },
                 "arguments": {
                     "parameters": [
                         {"name": "build-id", "value": build_id},
