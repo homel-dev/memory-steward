@@ -289,8 +289,19 @@ class StdioMcpClient:
         assert self._process.stderr is not None
         for raw in self._process.stderr:
             line = raw.rstrip()
-            if line:
-                log.info("codegraph-server: %s", line)
+            if not line or line.startswith("TEL:"):
+                continue
+            severity = next(
+                (part for part in line.split()
+                 if part in {"TRACE", "DEBUG", "INFO", "WARN", "ERROR"}),
+                None,
+            )
+            if severity in {"TRACE", "DEBUG", "INFO"}:
+                continue
+            log.log(
+                logging.ERROR if severity == "ERROR" else logging.WARNING,
+                "codegraph-server: %s", line,
+            )
 
     def _write(self, message: dict[str, Any]) -> None:
         if not self.alive:

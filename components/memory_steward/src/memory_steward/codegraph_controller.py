@@ -414,6 +414,7 @@ def main() -> None:
         app,
         host="0.0.0.0",
         port=int(os.environ.get("CODEGRAPH_CONTROLLER_PORT", "8093")),
+        log_level="warning",
         access_log=False,
     )
 
