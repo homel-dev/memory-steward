@@ -16,7 +16,7 @@ data:
   MEMORY_ROUTER_URL: "http://memory-router:8080"
   STEWARD_LLM_BASE_URL: "http://llm-large.llm-runtime.svc.cluster.local:8000"
   MCP_URL: "http://memory-steward-mcp:8081/mcp"
-  CODEGRAPH_WORKER_IMAGE: "ghcr.io/homel-dev/memory-steward/memory-steward@sha256:7d97ae3fc183fc62ea5bd708a6be3f3416c323f348e8f7787e559898792ac8c6"
+  CODEGRAPH_WORKER_IMAGE: "ghcr.io/homel-dev/memory-steward/memory-steward@sha256:067937fd70532ec552e5610c8ddd869bea14f6f8c252f463c0aacbc333ee828a"
   CODEGRAPH_GENERATION_BUCKET: "codegraph"
   MAX_CONTEXT_TOKENS: "128000"
   # Router prompt-input planning ceiling. Keep this greater than MAX_CONTEXT_TOKENS
