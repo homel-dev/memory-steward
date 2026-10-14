@@ -187,16 +187,7 @@ class CodeGraphBuildStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT b.id::text, b.generation_bucket, b.generation_key,
-                       b.result, b.source_name,
-                       ARRAY(
-                         SELECT previous.id::text
-                         FROM codegraph_builds previous
-                         WHERE previous.source_namespace = b.source_namespace
-                           AND previous.source_kind = b.source_kind
-                           AND previous.source_name = b.source_name
-                           AND previous.id <> b.id
-                           AND previous.state = 'succeeded'
-                       )
+                       b.result, b.source_name
                 FROM codegraph_builds b
                 WHERE b.state = 'succeeded'
                   AND b.generation_bucket IS NOT NULL
@@ -218,7 +209,7 @@ class CodeGraphBuildStore:
             return [
                 {"build_id": str(row[0]), "generation_bucket": row[1],
                  "generation_key": row[2], "result": row[3],
-                 "repository": row[4], "previous_build_ids": row[5]}
+                 "repository": row[4]}
                 for row in cur.fetchall()
             ]
 
@@ -254,6 +245,36 @@ class CodeGraphBuildStore:
                 RETURNING repository
             """, (endpoint, build["build_id"]))
             return cur.fetchone() is not None
+
+    def retired_serving_build_ids(self, *, grace_seconds: int = 120) -> list[str]:
+        """Select superseded serving generations without active pinned readers."""
+        if grace_seconds < 0:
+            raise ValueError("grace_seconds must be non-negative")
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT old.id::text
+                FROM codegraph_serving_aliases a
+                JOIN codegraph_builds live ON live.id = a.build_id
+                JOIN codegraph_builds old
+                  ON old.source_namespace = live.source_namespace
+                 AND old.source_kind = live.source_kind
+                 AND old.source_name = live.source_name
+                WHERE old.state = 'succeeded'
+                  AND (old.received_at, old.id) < (live.received_at, live.id)
+                  AND a.updated_at < now() - (%s * interval '1 second')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM capability_sessions session
+                    JOIN codegraph_registry registry
+                      ON registry.id = session.codegraph_registry_id
+                    WHERE session.status = 'active'
+                      AND session.expires_at > now()
+                      AND session.revision <> 'latest'
+                      AND registry.worker_id =
+                          'cg-serve-' || replace(old.id::text, '-', '')
+                  )
+                ORDER BY old.source_namespace, old.source_name, old.received_at
+            """, (grace_seconds,))
+            return [str(row[0]) for row in cur.fetchall()]
 
     def pending(self, *, limit: int) -> list[BuildRecord]:
         with self._connect() as conn, conn.cursor() as cur:

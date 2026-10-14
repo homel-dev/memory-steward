@@ -288,10 +288,17 @@ class CodeGraphController:
             for build in self.store.successful_generations():
                 try:
                     endpoint = self.publisher.ensure(build)
-                    if endpoint and self.store.activate_serving_alias(build, endpoint):
-                        self.publisher.prune(build)
+                    if endpoint:
+                        self.store.activate_serving_alias(build, endpoint)
                 except Exception:
                     log.exception("failed to publish CodeGraph serving endpoint build_id=%s", build["build_id"])
+            # Run GC on every reconciliation, including after controller restart.
+            try:
+                retired = self.store.retired_serving_build_ids()
+                if retired:
+                    self.publisher.prune_build_ids(retired)
+            except Exception:
+                log.exception("failed to retire superseded CodeGraph serving generations")
         return handled
 
     def run_forever(self) -> None:

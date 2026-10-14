@@ -156,11 +156,11 @@ class CodeGraphPublisher:
                          repository, build["build_id"])
         return f"http://{alias}.{self.namespace}.svc.cluster.local:8094"
 
-    def prune(self, build: Any) -> None:
-        # Keep the active generation Service for exact-revision compatibility.
+    def prune_build_ids(self, build_ids: list[str]) -> None:
+        """Retire superseded deployments and services selected by the alias store."""
         if not hasattr(self, "_pruned"):
             self._pruned: set[str] = set()
-        for old_id in build["previous_build_ids"]:
+        for old_id in build_ids:
             if old_id in self._pruned:
                 continue
             old_name = service_name(old_id)
@@ -175,3 +175,4 @@ class CodeGraphPublisher:
                 if exc.status != 404:
                     raise
             self._pruned.add(old_id)
+            log.info("codegraph_event=serving_retired build_id=%s", old_id)
