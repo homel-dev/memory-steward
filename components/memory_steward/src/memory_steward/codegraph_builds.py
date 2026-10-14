@@ -276,6 +276,33 @@ class CodeGraphBuildStore:
             """, (grace_seconds,))
             return [str(row[0]) for row in cur.fetchall()]
 
+    def latest_superseded_sources(self) -> list[FluxArtifactEvent]:
+        """Find sources whose last recorded artifact was superseded with no successor."""
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT source_api_version, source_kind, source_namespace,
+                       source_name, source_uid, artifact_revision, artifact_digest
+                FROM (
+                    SELECT DISTINCT ON (source_namespace, source_kind, source_name)
+                           source_api_version, source_kind, source_namespace,
+                           source_name, source_uid, artifact_revision,
+                           artifact_digest, state
+                    FROM codegraph_builds
+                    ORDER BY source_namespace, source_kind, source_name,
+                             received_at DESC, id DESC
+                ) latest
+                WHERE state = 'superseded'
+            """)
+            return [
+                FluxArtifactEvent(
+                    source_api_version=row[0], source_kind=row[1],
+                    source_namespace=row[2], source_name=row[3],
+                    source_uid=row[4], artifact_revision=row[5],
+                    artifact_digest=row[6], payload={},
+                )
+                for row in cur.fetchall()
+            ]
+
     def pending(self, *, limit: int) -> list[BuildRecord]:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(

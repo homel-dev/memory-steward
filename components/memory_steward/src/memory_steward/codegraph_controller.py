@@ -181,6 +181,27 @@ class CodeGraphController:
                         f"event={build.artifact_revision}/{build.artifact_digest} "
                         f"current={current.revision}/{current.digest}"
                     )
+                    # Flux can advance before a queued NewArtifact is handled.
+                    # Record the observed current artifact first so a failed
+                    # write cannot discard the only route to the latest build.
+                    catchup = self.store.record_event(FluxArtifactEvent(
+                        source_api_version=build.source_api_version,
+                        source_kind=build.source_kind,
+                        source_namespace=build.source_namespace,
+                        source_name=build.source_name,
+                        source_uid=build.source_uid,
+                        artifact_revision=current.revision,
+                        artifact_digest=current.digest,
+                        payload={"reason": "CurrentArtifactCatchup",
+                                 "superseded_build_id": build.build_id},
+                    ))
+                    if catchup.inserted:
+                        log.info(
+                            "codegraph_event=artifact_catchup build_id=%s "
+                            "superseded_build_id=%s source=%s/%s revision=%s digest=%s",
+                            catchup.build_id, build.build_id, build.source_namespace,
+                            build.source_name, current.revision, current.digest,
+                        )
                     if self.store.mark_superseded(build.build_id, detail):
                         WORKFLOW_OPERATIONS.labels(operation="submit", outcome="superseded").inc()
                         log.info(
@@ -282,7 +303,49 @@ class CodeGraphController:
                 WORKFLOW_OPERATIONS.labels(operation="observe", outcome="error").inc()
         return handled
 
+    def _recover_superseded_sources(self) -> None:
+        # Repair a missed final NewArtifact after restart or notification lag.
+        # Only sources whose latest durable event was superseded are checked.
+        try:
+            sources = self.store.latest_superseded_sources()
+        except Exception:
+            log.exception("failed to list superseded CodeGraph sources")
+            return
+        for source in sources:
+            try:
+                current = self.flux.get_artifact(source)
+                if (current.revision, current.digest) == (
+                    source.artifact_revision, source.artifact_digest
+                ):
+                    continue
+                result = self.store.record_event(FluxArtifactEvent(
+                    source_api_version=source.source_api_version,
+                    source_kind=source.source_kind,
+                    source_namespace=source.source_namespace,
+                    source_name=source.source_name,
+                    source_uid=source.source_uid,
+                    artifact_revision=current.revision,
+                    artifact_digest=current.digest,
+                    payload={"reason": "SupersededSourceRecovery"},
+                ))
+                if result.inserted:
+                    log.info(
+                        "codegraph_event=artifact_recovered build_id=%s source=%s/%s "
+                        "revision=%s digest=%s",
+                        result.build_id, source.source_namespace, source.source_name,
+                        current.revision, current.digest,
+                    )
+            except Exception:
+                log.exception(
+                    "failed to recover current CodeGraph artifact source=%s/%s",
+                    source.source_namespace, source.source_name,
+                )
+
     def drain_once(self) -> int:
+        now = time.monotonic()
+        if now >= getattr(self, "_next_missing_source_check", 0.0):
+            self._next_missing_source_check = now + 60.0
+            self._recover_superseded_sources()
         handled = self._submit_pending() + self._observe_active()
         if self.publisher is not None:
             for build in self.store.successful_generations():

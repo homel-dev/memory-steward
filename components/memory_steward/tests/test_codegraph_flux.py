@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 
 from memory_steward.argo_workflows import ArgoWorkflowClient, WorkflowRef
-from memory_steward.codegraph_builds import BuildRecord, RecordResult
+from memory_steward.codegraph_builds import BuildRecord, FluxArtifactEvent, RecordResult
 from memory_steward.codegraph_controller import CodeGraphController, create_app
 from memory_steward.codegraph_state import extract_archive
 from memory_steward.codegraph_worker import FluxIndexWorkerConfig, _verify_flux_digest, run_flux_index
@@ -177,8 +177,73 @@ def test_controller_supersedes_stale_event_without_workflow():
     controller = CodeGraphController(store, flux=flux, argo=argo, generation_bucket="codegraph", worker_image="memory-steward@sha256:test")
 
     assert controller.drain_once() == 1
+    caught_up = store.record_event.call_args.args[0]
+    assert caught_up.source_namespace == "flux-system"
+    assert caught_up.source_name == "project-source"
+    assert caught_up.artifact_revision == "main@sha1:" + "c" * 40
+    assert caught_up.artifact_digest == "sha256:" + "d" * 64
+    assert caught_up.payload["superseded_build_id"] == _build().build_id
+    assert [
+        item[0] for item in store.mock_calls
+        if item[0] in {"record_event", "mark_superseded"}
+    ] == ["record_event", "mark_superseded"]
     store.mark_superseded.assert_called_once()
     argo.submit.assert_not_called()
+
+
+def test_controller_keeps_stale_event_pending_if_catchup_write_fails():
+    store = MagicMock()
+    store.pending.return_value = [_build()]
+    store.active.return_value = []
+    store.record_event.side_effect = RuntimeError("Postgres temporarily unavailable")
+    flux = MagicMock()
+    flux.get_artifact.return_value = FluxArtifactStatus(
+        url="http://source-controller/new.tar.gz",
+        revision="main@sha1:" + "c" * 40,
+        digest="sha256:" + "d" * 64,
+    )
+    argo = MagicMock()
+    controller = CodeGraphController(
+        store, flux=flux, argo=argo, generation_bucket="codegraph",
+        worker_image="memory-steward@sha256:test",
+    )
+
+    assert controller.drain_once() == 0
+    store.record_event.assert_called_once()
+    store.mark_superseded.assert_not_called()
+    argo.submit.assert_not_called()
+
+
+def test_controller_recovers_rr_after_last_event_was_superseded():
+    source = FluxArtifactEvent(
+        source_api_version="source.toolkit.fluxcd.io/v1",
+        source_kind="GitRepository", source_namespace="flux-system",
+        source_name="relentless-rekrow", source_uid="uid",
+        artifact_revision="main@sha1:" + "b" * 40,
+        artifact_digest="sha256:" + "a" * 64, payload={},
+    )
+    store = MagicMock()
+    store.latest_superseded_sources.return_value = [source]
+    store.pending.return_value = []
+    store.active.return_value = []
+    store.record_event.return_value = RecordResult(build_id="new-rr-build", inserted=True)
+    flux = MagicMock()
+    flux.get_artifact.return_value = FluxArtifactStatus(
+        url="http://source-controller/latest.tar.gz",
+        revision="main@sha1:" + "c" * 40,
+        digest="sha256:" + "d" * 64,
+    )
+    controller = CodeGraphController(
+        store, flux=flux, argo=MagicMock(), generation_bucket="codegraph",
+        worker_image="memory-steward@sha256:test",
+    )
+
+    assert controller.drain_once() == 0
+    recovered = store.record_event.call_args.args[0]
+    assert recovered.source_name == "relentless-rekrow"
+    assert recovered.artifact_revision == "main@sha1:" + "c" * 40
+    assert recovered.artifact_digest == "sha256:" + "d" * 64
+    assert recovered.payload["reason"] == "SupersededSourceRecovery"
 
 
 class _ObjectResponse(io.BytesIO):
