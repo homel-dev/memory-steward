@@ -23,6 +23,7 @@ spec:
     metadata:
       labels:
         app: memory-router
+        app.kubernetes.io/name: memory-router
     spec:
       containers:
         - name: router
