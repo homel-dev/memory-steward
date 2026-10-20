@@ -23,6 +23,7 @@ spec:
     metadata:
       labels:
         app: memory-steward
+        app.kubernetes.io/name: memory-steward
     spec:
       containers:
         - name: steward
