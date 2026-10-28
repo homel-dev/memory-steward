@@ -57,6 +57,8 @@ The implemented ingestion surface lives in `memory-steward-mcp` content-plane to
 
 URL ingestion is durable and asynchronous. `ref_ingest_url` inserts a `reference_ingestion_jobs` row and returns its UUID immediately; `reference-ingest-worker` performs bounded fetch/chunk/embed/upsert work. `ref_ingest_text` and Git ingestion remain synchronous but share the same bounded batching implementation.
 
+URL and Git sources share one raw-document normalization path before chunking. Text/Markdown/HTML are normalized as text documents. PDF documents are parsed inside the `memory-steward-mcp` image with `pypdf` and emitted as page-aware text sections. A PDF without an extractable text layer fails explicitly; no host-side PDF tooling is part of the ingestion contract.
+
 [Back to top](#navigation)
 
 ---
@@ -167,10 +169,10 @@ Unknown filter names are rejected at Pydantic request validation. This keeps the
 
 | Path | Initiator | Input | Result |
 | --- | --- | --- | --- |
-| ref_ingest_url | Operator/MCP client | URL + metadata | Durable Postgres job; worker performs bounded fetch, chunking, embedding, Qdrant upsert, and provenance |
+| ref_ingest_url | Operator/MCP client | URL + metadata; text/HTML/PDF source | Durable Postgres job; worker fetches and normalizes the document, then performs bounded chunking, embedding, Qdrant upsert, and provenance |
 | ref_ingest_text | Operator/MCP client | Text + metadata | Chunking/embedding and Reference Memory upsert |
-| git_ingest_repo | Operator/MCP Git plane | Registered repository selection | Repository content ingested into reference lane |
-| git_ingest_file | Operator/MCP Git plane | One repository file | Selected file ingested into reference lane |
+| git_ingest_repo | Operator/MCP Git plane | Registered repository selection + extension filter | Matching repository documents are fetched as raw bytes, normalized, and ingested into the reference lane |
+| git_ingest_file | Operator/MCP Git plane | One repository file | Selected repository document is fetched as raw bytes, normalized, and ingested into the reference lane |
 
 Reference ingestion is explicit. Ordinary chat admission does not promote conversational text into Reference Memory.
 
@@ -179,6 +181,8 @@ Reference ingestion is explicit. Ordinary chat admission does not promote conver
 The queue is canonical Postgres state in `reference_ingestion_jobs`. Workers claim one queued row using `FOR UPDATE SKIP LOCKED`, increment `attempt_count`, and fence every progress/final update by `(job_id, worker_id, attempt_count)`. A stale lease is requeued; if cancellation was already requested, lease expiry finalizes it as cancelled instead. Application failures are left `failed` and are retried only by explicit `ref_ingest_retry`.
 
 The worker fetches at most 64 MiB of decompressed response data, then processes reference chunks in batches of 8. Each batch is embedded independently and synchronously upserted to Qdrant with `wait=true`. Deterministic point ids make partial work safe to retry; if a job fails after an earlier Qdrant batch, those already-written chunks remain visible until the job is retried to completion or the namespace is explicitly purged. Successful job completion and insertion of the immutable `reference_ingestion` provenance row use one Postgres transaction.
+
+The same `REFERENCE_FETCH_MAX_BYTES` ceiling is applied by document normalization to Git-fetched blobs before parsing. Git ingestion is still synchronous; this change does not move Git sources into the URL job queue or add a second worker lifecycle.
 
 The embeddings service independently enforces its own limits: at most 64 texts per request, FastEmbed batch size 16, ONNX/native thread bounds, and a Kubernetes CPU limit. These service-side limits are a second barrier if another caller bypasses the reference worker.
 

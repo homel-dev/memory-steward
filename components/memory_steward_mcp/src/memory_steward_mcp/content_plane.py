@@ -18,11 +18,14 @@ import os
 import re
 import time
 import uuid
+from io import BytesIO
+from urllib.parse import urlsplit
 
 import psycopg
 import requests
 from bs4 import BeautifulSoup, NavigableString
 from fastmcp import FastMCP
+from pypdf import PdfReader
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import FieldCondition, Filter, MatchValue, PointStruct
 
@@ -232,6 +235,67 @@ def _extract_html_document(raw_html: str) -> str:
     return "\n".join(normalized).strip()
 
 
+def _extract_pdf_document(raw_pdf: bytes) -> str:
+    """Extract page-aware text from a PDF without host-side tooling."""
+    try:
+        reader = PdfReader(BytesIO(raw_pdf), strict=False)
+    except Exception as exc:
+        raise ValueError(f"failed to parse PDF: {exc}") from exc
+
+    pages: list[str] = []
+    for page_number, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            raise ValueError(
+                f"failed to extract PDF page {page_number}: {exc}"
+            ) from exc
+
+        text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if text:
+            pages.append(f"## Page {page_number}\n\n{text}")
+
+    if not pages:
+        raise ValueError("PDF contains no extractable text layer")
+
+    return "\n\n".join(pages)
+
+
+def _normalize_reference_document(
+    raw: bytes,
+    *,
+    media_type: str = "",
+    filename: str = "",
+    encoding: str = "utf-8",
+) -> str:
+    """Normalize URL/Git document bytes into the shared reference text format."""
+    if len(raw) > REFERENCE_FETCH_MAX_BYTES:
+        raise ValueError(
+            f"reference document exceeds {REFERENCE_FETCH_MAX_BYTES} bytes"
+        )
+
+    normalized_media_type = media_type.partition(";")[0].strip().lower()
+    looks_like_pdf = b"%PDF-" in raw[:1024]
+    if normalized_media_type == "application/pdf" or filename.lower().endswith(".pdf") or looks_like_pdf:
+        return _extract_pdf_document(raw)
+
+    try:
+        text = raw.decode(encoding, errors="replace")
+    except LookupError:
+        text = raw.decode("utf-8", errors="replace")
+
+    looks_like_html = bool(
+        re.search(
+            r"<(?:!doctype\s+html|html|body|main|article|h[1-4])\b",
+            text[:4096],
+            re.I,
+        )
+    )
+    if normalized_media_type in {"text/html", "application/xhtml+xml"} or looks_like_html:
+        return _extract_html_document(text)
+    return text
+
+
 def _fetch_url(url: str) -> str:
     """Fetch a reference URL with a hard decompressed-size ceiling."""
     r = requests.get(
@@ -260,28 +324,27 @@ def _fetch_url(url: str) -> str:
                     raise ValueError(
                         f"reference document exceeds {REFERENCE_FETCH_MAX_BYTES} bytes"
                     )
-            encoding = getattr(r, "encoding", None) or "utf-8"
-            text = bytes(raw).decode(encoding, errors="replace")
         else:
-            text = r.text
-            if len(text.encode("utf-8")) > REFERENCE_FETCH_MAX_BYTES:
+            encoding = getattr(r, "encoding", None) or "utf-8"
+            content = getattr(r, "content", None)
+            if isinstance(content, (bytes, bytearray)):
+                raw.extend(content)
+            else:
+                raw.extend(r.text.encode(encoding, errors="replace"))
+            if len(raw) > REFERENCE_FETCH_MAX_BYTES:
                 raise ValueError(
                     f"reference document exceeds {REFERENCE_FETCH_MAX_BYTES} bytes"
                 )
 
+        encoding = getattr(r, "encoding", None) or "utf-8"
         media_type = r.headers.get("content-type", "").partition(";")[0].lower()
-        looks_like_html = bool(
-            re.search(
-                r"<(?:!doctype\s+html|html|body|main|article|h[1-4])\b",
-                text[:4096],
-                re.I,
-            )
+        filename = urlsplit(url).path.rsplit("/", 1)[-1]
+        return _normalize_reference_document(
+            bytes(raw),
+            media_type=media_type,
+            filename=filename,
+            encoding=encoding,
         )
-
-        if media_type in {"text/html", "application/xhtml+xml"} or looks_like_html:
-            text = _extract_html_document(text)
-
-        return text
     finally:
         close = getattr(r, "close", None)
         if close is not None:
@@ -414,6 +477,39 @@ def _ingest_text_internal(
         f"✅ Ingested **{stats['upserted_count']} chunks** for "
         f"`{product}@{version}` ({scope}).\n"
         f"Source: {source_url}"
+    )
+
+
+def _ingest_document_internal(
+    qdrant: QdrantClient,
+    *,
+    raw: bytes,
+    product: str,
+    version: str,
+    scope: str,
+    source_url: str,
+    filename: str = "",
+    media_type: str = "",
+    encoding: str = "utf-8",
+) -> str:
+    """Normalize raw document bytes and ingest them through the shared path."""
+    try:
+        text = _normalize_reference_document(
+            raw,
+            media_type=media_type,
+            filename=filename,
+            encoding=encoding,
+        )
+    except Exception as exc:
+        return f"Reference ingestion failed: {exc}"
+
+    return _ingest_text_internal(
+        qdrant,
+        text=text,
+        product=product,
+        version=version,
+        scope=scope,
+        source_url=source_url,
     )
 
 

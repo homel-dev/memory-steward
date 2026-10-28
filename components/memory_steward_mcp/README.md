@@ -70,4 +70,6 @@ Keep the service internal. For local clients use `task ops:mcp:forward` and `htt
 
 `ref_ingest_url` does not fetch or embed the document in the MCP request. It writes a durable `reference_ingestion_jobs` row and returns the job id. The `reference-ingest-worker` Deployment claims jobs with `FOR UPDATE SKIP LOCKED`, fences updates by worker id plus attempt count, fetches with a 64 MiB decompressed-content ceiling, and embeds/upserts in bounded batches. Qdrant writes use `wait=true`; completion and the immutable `reference_ingestion` provenance row are committed together in Postgres.
 
-`ref_ingest_text` and Git ingestion are synchronous but share the same bounded batch implementation.
+URL and Git ingestion normalize raw document bytes through the same content-plane path before chunking. Text/Markdown/HTML remain supported and PDF files are parsed in the `memory-steward-mcp` image with `pypdf`; extracted PDF pages are emitted as page-aware sections before normal chunking. PDFs without an extractable text layer fail explicitly rather than being decoded as binary text.
+
+`ref_ingest_text` and Git ingestion are synchronous but share the same bounded batch implementation. Git provider adapters return raw bytes; the GitHub adapter requests the Contents API raw media type so repository PDFs are not forced through the JSON/base64 text path.

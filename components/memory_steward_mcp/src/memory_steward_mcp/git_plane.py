@@ -147,7 +147,7 @@ class _GitLabAdapter:
             page += 1
         return [f for f in files if f.get("type") == "blob"]
 
-    def fetch_file(self, project: str, file_path: str, ref: str) -> str:
+    def fetch_file(self, project: str, file_path: str, ref: str) -> bytes:
         enc = self._enc(project)
         enc_path = requests.utils.quote(file_path, safe="")
         r = requests.get(
@@ -157,7 +157,7 @@ class _GitLabAdapter:
             timeout=30,
         )
         r.raise_for_status()
-        return base64.b64decode(r.json()["content"]).decode("utf-8", errors="replace")
+        return base64.b64decode(r.json()["content"])
 
     def write_file(self, project: str, file_path: str, content: str,
                    commit_message: str, ref: str, overwrite: bool) -> str:
@@ -281,16 +281,18 @@ class _GitHubAdapter:
             if item.get("type") == "blob"
         ]
 
-    def fetch_file(self, project: str, file_path: str, ref: str) -> str:
+    def fetch_file(self, project: str, file_path: str, ref: str) -> bytes:
         owner, repo = project.split("/", 1)
+        headers = self._headers()
+        headers["Accept"] = "application/vnd.github.raw+json"
         r = requests.get(
             self._api(f"/repos/{owner}/{repo}/contents/{file_path}"),
-            headers=self._headers(),
+            headers=headers,
             params={"ref": ref},
             timeout=30,
         )
         r.raise_for_status()
-        return base64.b64decode(r.json()["content"]).decode("utf-8", errors="replace")
+        return r.content
 
     def write_file(self, project: str, file_path: str, content: str,
                    commit_message: str, ref: str, overwrite: bool) -> str:
@@ -433,7 +435,7 @@ class _BitbucketAdapter:
                 for v in r.json().get("values", [])
             ]
 
-    def fetch_file(self, project: str, file_path: str, ref: str) -> str:
+    def fetch_file(self, project: str, file_path: str, ref: str) -> bytes:
         if self._cloud:
             workspace, repo = project.split("/", 1)
             r = requests.get(
@@ -449,7 +451,7 @@ class _BitbucketAdapter:
                 timeout=30,
             )
         r.raise_for_status()
-        return r.text
+        return r.content
 
     def write_file(self, project: str, file_path: str, content: str,
                    commit_message: str, ref: str, overwrite: bool) -> str:
@@ -512,7 +514,7 @@ def _adapter(conn: dict):
 # Tool registration
 # ---------------------------------------------------------------------------
 
-def register_git_tools(mcp: FastMCP, ingest_text_fn):
+def register_git_tools(mcp: FastMCP, ingest_document_fn):
 
     # -----------------------------------------------------------------------
     # CONNECTION MANAGEMENT
@@ -724,14 +726,17 @@ def register_git_tools(mcp: FastMCP, ingest_text_fn):
             file_path = f["path"]
             source_url = adapter.file_url(project, file_path, ref)
             try:
-                content = adapter.fetch_file(project, file_path, ref=ref)
-                result = ingest_text_fn(
-                    text=content,
+                raw = adapter.fetch_file(project, file_path, ref=ref)
+                result = ingest_document_fn(
+                    raw=raw,
                     product=product,
                     version=version,
                     scope=scope,
                     source_url=source_url,
+                    filename=file_path,
                 )
+                if result.startswith("Reference ingestion failed:"):
+                    raise ValueError(result.removeprefix("Reference ingestion failed:").strip())
                 match = re.search(r'\*\*(\d+) chunks\*\*', result)
                 n = int(match.group(1)) if match else 0
                 total_chunks += n
@@ -778,16 +783,17 @@ def register_git_tools(mcp: FastMCP, ingest_text_fn):
 
         source_url = adapter.file_url(project, file_path, ref)
         try:
-            content = adapter.fetch_file(project, file_path, ref=ref)
+            raw = adapter.fetch_file(project, file_path, ref=ref)
         except Exception as e:
             return f"Failed to fetch `{file_path}` from `{project}`: {e}"
 
-        return ingest_text_fn(
-            text=content,
+        return ingest_document_fn(
+            raw=raw,
             product=product,
             version=version,
             scope=scope,
             source_url=source_url,
+            filename=file_path,
         )
 
     # -----------------------------------------------------------------------

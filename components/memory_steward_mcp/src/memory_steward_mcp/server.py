@@ -15,7 +15,7 @@ from starlette.responses import PlainTextResponse, Response
 from memory_steward_mcp.agent_plane import register_agent_tools
 from memory_steward_mcp.codegraph_plane import register_codegraph_plane
 from memory_steward_mcp.config import EMBEDDINGS_URL, QDRANT_URL
-from memory_steward_mcp.content_plane import _ingest_text_internal, register_content_tools
+from memory_steward_mcp.content_plane import _ingest_document_internal, register_content_tools
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
 from memory_steward_mcp.git_plane import register_git_tools
 from memory_steward_mcp.metrics import render as render_metrics
@@ -80,9 +80,9 @@ def embed_text(text: str) -> list[float]:
 if qdrant:
     register_content_tools(mcp, qdrant, embed_text)
     register_diagnostics_tools(mcp, qdrant)
-    # _ingest_text_internal now takes qdrant as its first positional arg; bind it
-    # so the git plane keeps calling ingest_text_fn(text=..., product=..., ...).
-    register_git_tools(mcp, ingest_text_fn=partial(_ingest_text_internal, qdrant))
+    # Git provider adapters return raw document bytes. Bind Qdrant here so URL
+    # and Git ingestion share the same document normalization and ingest path.
+    register_git_tools(mcp, ingest_document_fn=partial(_ingest_document_internal, qdrant))
 
 register_stability_tools(mcp)
 register_agent_tools(mcp)

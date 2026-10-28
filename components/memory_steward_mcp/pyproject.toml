@@ -26,6 +26,7 @@ dependencies = [
   "prometheus-client>=0.22,<1",
   "requests>=2.31",
   "beautifulsoup4>=4.12",
+  "pypdf>=5.9,<7",
 ]
 
 [project.optional-dependencies]

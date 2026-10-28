@@ -47,6 +47,42 @@ def test_extract_html_document_removes_chrome_and_preserves_headings() -> None:
     assert "site footer" not in text
 
 
+def test_normalize_reference_document_extracts_pdf_with_page_sections(monkeypatch) -> None:
+    class _Page:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class _Reader:
+        pages = [_Page("first page"), _Page("second page")]
+
+    monkeypatch.setattr(cp, "PdfReader", lambda *args, **kwargs: _Reader())
+
+    text = cp._normalize_reference_document(
+        b"%PDF-1.7\nnot-a-real-pdf",
+        filename="book.pdf",
+        media_type="application/octet-stream",
+    )
+
+    assert text == "## Page 1\n\nfirst page\n\n## Page 2\n\nsecond page"
+
+
+def test_normalize_reference_document_rejects_pdf_without_text_layer(monkeypatch) -> None:
+    class _Page:
+        def extract_text(self) -> str:
+            return ""
+
+    class _Reader:
+        pages = [_Page()]
+
+    monkeypatch.setattr(cp, "PdfReader", lambda *args, **kwargs: _Reader())
+
+    with pytest.raises(ValueError, match="no extractable text layer"):
+        cp._normalize_reference_document(b"%PDF-1.7\n", filename="scan.pdf")
+
+
 def test_fetch_url_detects_html_and_normalizes_it(monkeypatch) -> None:
     html = """
     <html><body><main>
@@ -254,6 +290,25 @@ class _StreamingResponse:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_fetch_url_detects_pdf_before_text_decode(monkeypatch) -> None:
+    response = _StreamingResponse([b"%PDF-1.7\n", b"binary-payload"])
+    response.headers["content-type"] = "application/pdf"
+    captured = {}
+
+    def fake_extract(raw: bytes) -> str:
+        captured["raw"] = raw
+        return "## Page 1\n\nmanual text"
+
+    monkeypatch.setattr(cp, "_extract_pdf_document", fake_extract)
+    monkeypatch.setattr(cp.requests, "get", lambda *args, **kwargs: response)
+
+    text = cp._fetch_url("https://docs.example.test/manual.pdf")
+
+    assert captured["raw"] == b"%PDF-1.7\nbinary-payload"
+    assert text == "## Page 1\n\nmanual text"
+    assert response.closed is True
 
 
 def test_fetch_url_enforces_decompressed_size_limit(monkeypatch) -> None:
