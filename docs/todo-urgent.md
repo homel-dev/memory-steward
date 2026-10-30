@@ -1,38 +1,105 @@
-# Memory Steward Near-Term TODO: Reference Catalog, RR Reference Preflight, and Durable Backups
-
-**Status:** PROPOSAL / NEAR-TERM TODO  
-**Scope:** Memory Steward Reference Memory, RR integration, persistent-data backup  
-**Implementation status:** Not implemented unless explicitly marked otherwise
-
----
-
-## 1. Goal
-
-Improve Reference Memory so that:
-
-1. ingested documents are represented as first-class catalog objects;
-2. document metadata is generated automatically during ingestion;
-3. RR can request task-specific Reference Memory preparation before each agent step;
-4. agents receive a bounded set of strongly relevant references while retaining visibility into additional available material;
-5. existing semantic Reference Memory search remains available for deeper on-demand retrieval;
-6. persistent Memory Steward data is backed up locally and replicated off-host.
-
-The implementation MUST preserve the existing distinction between:
-
-- canonical Reference Memory;
-- dynamic memory;
-- `agent_reference`;
-- CodeGraph and other deterministic analyzers.
-
-Reference Memory remains globally reusable source material and MUST NOT become project-scoped merely because an RR request contains a `project_id`.
+# MEMORY STEWARD NEAR-TERM TODO
+## Reference Catalog, RR Reference Preflight, and Durable Backups
+### Engineering Proposal
+*Namespace: memory-steward • Owner: architecture-team*
 
 ---
 
-## 2. Current State
+## Navigation
 
-Reference Memory content is currently stored in Qdrant as `memory_type=reference_memory`.
+- [0. Status, Scope, and Authority](#0-status-scope-and-authority)
+- [1. Purpose](#1-purpose)
+- [2. Current Implemented State](#2-current-implemented-state)
+- [3. Reference Document Catalog](#3-reference-document-catalog)
+- [4. Reference Ingestion Enrichment](#4-reference-ingestion-enrichment)
+- [5. Existing Corpus Re-Cataloging](#5-existing-corpus-re-cataloging)
+- [6. RR Reference Preflight](#6-rr-reference-preflight)
+- [7. Reference Discovery and Catalog Lookup](#7-reference-discovery-and-catalog-lookup)
+- [8. MCP Access Boundary](#8-mcp-access-boundary)
+- [9. Durable Backup Path](#9-durable-backup-path)
+- [10. Required Implementation Work](#10-required-implementation-work)
+- [11. Explicit Non-Goals](#11-explicit-non-goals)
+- [12. Open Decisions](#12-open-decisions)
+- [13. Recommendations](#13-recommendations)
+- [14. Closing Statement](#14-closing-statement)
 
-Current chunk payloads contain:
+---
+
+## 0. Status, Scope, and Authority
+
+**Status:** PROPOSAL  
+**Audience:** Memory Steward maintainers, RR maintainers, agent-runtime integrators  
+**Change policy:** Working near-term implementation plan; unimplemented behavior MUST remain explicitly non-runtime until code, migrations, manifests, and affected documentation are updated.
+
+The current Memory Steward repository implementation is authoritative for existing runtime behavior.
+
+This document records agreed near-term work for:
+
+- Reference Memory document cataloging;
+- automatic document metadata enrichment;
+- existing-corpus re-cataloging;
+- RR-specific Reference preflight;
+- Reference catalog discovery;
+- durable Memory Steward backup publication and off-host replication.
+
+The following items are proposals and are not current runtime capabilities:
+
+- canonical Reference Document Catalog;
+- `document_id` binding between catalog documents and Qdrant chunks;
+- RR-specific Reference preflight;
+- document catalog lookup tool;
+- automatic publication of local backups to MinIO;
+- automatic replication from MinIO to S3/R2.
+
+> **Hard Invariant:** Canonical Reference Memory remains globally reusable knowledge and MUST NOT become project-scoped merely because RR supplies `project_id` or other run identity.
+
+[Back to top](#navigation)
+
+---
+
+## 1. Purpose
+
+The immediate work is intended to solve three problems.
+
+First, Reference Memory currently has searchable chunks and ingestion provenance but does not have a canonical document-level catalog that tells an agent what documents exist and what each document contains.
+
+Second, an RR worker should not begin with either no awareness of available Reference material or an unbounded dump of the whole corpus. Before an RR agent step begins, Memory Steward should select likely useful documents and expose the rest through a compact discovery view.
+
+Third, Memory Steward persistent state currently has local backup generation, but the backup path must be completed so a recoverable copy exists outside the local Kubernetes failure domain.
+
+[Back to top](#navigation)
+
+---
+
+## 2. Current Implemented State
+
+### 2.1 Reference ingestion
+
+Reference ingestion already supports a shared content path for current source types.
+
+Current behavior includes:
+
+- durable asynchronous URL ingestion through `reference_ingestion_jobs`;
+- processing by `reference-ingest-worker`;
+- synchronous direct-text ingestion;
+- synchronous Git ingestion;
+- shared normalization for URL and Git document bytes;
+- text and Markdown ingestion;
+- HTML extraction;
+- PDF extraction using `pypdf`;
+- page-aware PDF sections;
+- explicit failure when a PDF has no extractable text layer;
+- bounded document size;
+- bounded embedding batches;
+- successful-ingestion provenance written to `reference_ingestion`.
+
+`reference_ingestion` is immutable ingestion provenance. It is not a document catalog.
+
+`reference_ingestion_jobs` is a durable URL-ingestion queue. It is not a document catalog.
+
+### 2.2 Current Qdrant Reference payload
+
+Current Reference chunks contain payload fields including:
 
 - `memory_type`;
 - `ref_key`;
@@ -45,483 +112,593 @@ Current chunk payloads contain:
 - `chunk_index`;
 - `ingested_at`.
 
-Postgres currently records Reference ingestion provenance in `reference_ingestion` and durable URL-ingestion work in `reference_ingestion_jobs`.
+There is currently no canonical `document_id`.
 
-`reference_ingestion` is an ingestion history, not a canonical document catalog. Re-ingesting the same source creates another ingestion record.
+### 2.3 Current Reference retrieval
 
-There is currently no authoritative Postgres entity representing:
+Current agent-facing Reference retrieval already provides:
 
-> this document exists, has this stable identity, this title, this source revision, and this generated catalog metadata.
+~~~text
+memory.reference.search
+memory.reference.get
+~~~
 
-The diagnostic snapshot showed approximately 31,798 current Reference Memory chunks in Qdrant across the existing documentation and book corpora.
+These operations remain responsible for actual semantic chunk search and exact chunk retrieval.
 
-The software-engineering book corpus is successfully ingested, but PDF chunks are currently primarily page-oriented (`Page N`, `Page N (part N)`) rather than represented by a durable document-level catalog and semantic document map.
+No replacement Reference search operation is required by this proposal.
+
+### 2.4 Current backup path
+
+The current backup CronJob generates:
+
+- PostgreSQL `pg_dump -Fc`;
+- Qdrant collection snapshot.
+
+The generated backup files are written to the in-cluster backup PVC.
+
+The existing bootstrap restore path can consume a matching PostgreSQL dump and Qdrant snapshot from MinIO using a manifest containing hashes for the two objects.
+
+Automatic transfer of the locally generated backup pair to MinIO is not currently part of the nightly backup path.
+
+Automatic replication from MinIO to S3 or R2 is also not currently implemented.
+
+[Back to top](#navigation)
 
 ---
 
 ## 3. Reference Document Catalog
 
-Add a canonical Reference Document Catalog in Postgres.
+Memory Steward SHOULD add a canonical document-level Reference Catalog in Postgres.
 
-There MUST be one current catalog record per ingested document identity.
+The catalog is separate from:
 
-The initial schema SHOULD remain deliberately small.
+- `reference_ingestion`;
+- `reference_ingestion_jobs`;
+- Qdrant chunk storage;
+- `agent_reference`.
 
-Required stable fields:
+The catalog represents logical source documents.
+
+A document record should initially contain stable fields equivalent to:
 
 - `document_id`;
+- `source`;
 - `product`;
 - `version`;
-- `source`;
-- `content_hash`;
 - `title`;
-- `metadata JSONB`;
-- creation/update timestamps;
-- ingestion/current-state marker if required by the final lifecycle design.
+- `content_hash`.
 
-`metadata` MAY contain generated document-level information such as:
+Variable document-level enrichment should be stored separately from those stable fields, preferably as structured metadata.
 
-- short description / abstract;
+Initial enrichment may contain:
+
 - summary;
-- keywords;
 - topics;
-- document type;
-- outline or table of contents when reliably available;
-- other enrichment added later.
+- keywords;
+- outline or table of contents when reliably available.
 
-These fields MUST NOT be duplicated onto every Qdrant chunk unless a concrete retrieval requirement justifies doing so.
+The catalog is intended to answer:
 
-The catalog is the authoritative answer to:
+> What Reference documents exist and what are they about?
 
-> What Reference documents do we have?
+Qdrant remains responsible for answering:
 
-Qdrant remains the answer to:
+> Which chunks from those documents are semantically relevant to this query?
 
-> Which content inside those documents is semantically relevant to this query?
+Document-level metadata SHOULD NOT be duplicated onto every Qdrant chunk unless a specific retrieval requirement later justifies that duplication.
+
+### 3.1 Qdrant document binding
+
+Reference chunks SHOULD gain:
+
+~~~text
+document_id
+~~~
+
+The field links each semantic chunk to its canonical Postgres document record.
+
+The existing Qdrant payload remains otherwise conceptually unchanged.
+
+> **Hard Invariant:** Adding document identity MUST NOT silently redefine existing chunk identity or deduplication behavior. The exact relationship between current content-derived point IDs and document provenance must be decided explicitly before implementation.
+
+[Back to top](#navigation)
 
 ---
 
-## 4. Qdrant Document Binding
+## 4. Reference Ingestion Enrichment
 
-Every Reference Memory chunk MUST carry a stable `document_id`.
+The existing ingestion path SHOULD be extended rather than replaced.
 
-The Qdrant payload therefore remains mostly unchanged, with `document_id` added to the current chunk metadata.
+The desired proposed flow is:
 
-`document_id` binds semantic search results back to the canonical Postgres catalog record.
+~~~mermaid
+flowchart LR
+    Source[Reference Source]
+    Normalize[Normalize Document]
+    Metadata[Extract Document Metadata]
+    Catalog[(Postgres Reference Catalog)]
+    Chunk[Chunk Document]
+    Embed[Embed Chunks]
+    Qdrant[(Qdrant Reference Memory)]
 
-Document-level summary, keywords, outline, roles, collections, and similar metadata SHOULD NOT be copied to every chunk by default.
+    Source --> Normalize
+    Normalize --> Metadata
+    Metadata --> Catalog
+    Normalize --> Chunk
+    Catalog -->|document_id| Chunk
+    Chunk --> Embed
+    Embed --> Qdrant
+~~~
 
-Existing chunk retrieval and semantic search MUST remain operational.
+Metadata extraction should occur once per logical document rather than once per chunk.
 
----
+### 4.1 Deterministic extraction
 
-## 5. Ingestion Enrichment
+The ingestion path SHOULD first use metadata available directly from the source.
 
-The existing ingestion pipeline SHOULD be extended rather than replaced.
+Useful inputs include:
 
-The desired flow is:
-
-`source -> normalize -> document metadata extraction -> catalog upsert -> chunk -> embed -> Qdrant`
-
-Supported source forms currently include text/Markdown, HTML, Git-backed documentation, and PDF.
-
-The enrichment step MUST run once per document, not once per chunk.
-
-### 5.1 Deterministic extraction first
-
-The ingestion pipeline SHOULD extract whatever is available without an LLM:
-
-- repository/source path;
-- immutable source revision where available;
-- filename;
+- filename and source path;
+- source URL;
+- repository identity and revision when available;
+- Markdown/MDX/AsciiDoc headings;
 - front matter;
-- HTML title/metadata;
-- Markdown/MDX headings;
-- AsciiDoc headings;
+- HTML title and headings;
 - PDF metadata;
-- PDF bookmarks/outline when available;
-- document structure already present in the source.
+- PDF outline/bookmarks when available;
+- content hash.
 
-### 5.2 Bounded model enrichment
+### 4.2 Model-assisted enrichment
 
-A small model MAY be used when deterministic extraction does not provide sufficient catalog information.
+When deterministic extraction does not provide enough useful catalog information, a bounded model pass MAY generate document-level metadata.
 
-The model SHOULD receive only bounded document evidence, for example:
+The intended generated information includes:
 
-- title/filename;
-- extracted metadata;
-- table of contents or headings;
-- selected beginning/end excerpts;
-- bounded representative sections.
+- concise summary;
+- topics;
+- keywords;
+- normalized title when necessary.
 
-The model may produce structured catalog metadata such as:
+The model MUST NOT establish document provenance, source identity, content hash, or immutable version identity.
 
-- normalized title;
-- short abstract;
-- summary;
-- keywords/topics.
+The design SHOULD minimize manual catalog maintenance.
 
-The model MUST NOT become the authority for document identity, source revision, content hash, or provenance.
+### 4.3 Existing ingestion behavior
 
-Enrichment failure SHOULD NOT destroy otherwise valid Reference Memory ingestion. The failure/degraded state must remain observable.
+The following current mechanisms SHOULD remain the basis of ingestion:
 
-### 5.3 PDF improvement
+- current URL job lifecycle;
+- current Git ingestion path;
+- current document normalization;
+- current PDF extraction;
+- current chunking and embedding path;
+- current provenance recording.
 
-PDF ingestion already extracts text successfully.
+No separate Reference ingestion scheduler or second ingestion framework is required.
 
-The next improvement SHOULD attempt to preserve useful document structure:
+[Back to top](#navigation)
 
-1. PDF outline/bookmarks when present;
-2. recognizable chapter/section structure where reliably extractable;
-3. page-based sections as the fallback.
+---
 
-OCR remains out of scope unless separately approved.
+## 5. Existing Corpus Re-Cataloging
 
-### 5.4 Version identity
+The existing Reference corpus needs to be converted into the same document-level catalog representation used by future ingestion.
 
-Mutable names such as `main` SHOULD NOT be treated as the preferred long-term version identity for authoritative Reference Memory.
+The re-catalog operation SHOULD:
 
-Git-backed ingestion SHOULD retain the immutable source commit SHA and use it for exact document provenance.
+1. identify existing logical source documents;
+2. create canonical document records;
+3. generate document metadata using the same enrichment path as new ingestion;
+4. establish `document_id`;
+5. associate existing or regenerated Qdrant chunks with that document identity.
+
+The resulting representation SHOULD be equivalent regardless of whether a document was:
+
+- ingested after the catalog implementation;
+- already present before the catalog implementation and later re-cataloged.
+
+The implementation method for Qdrant backfill remains open.
+
+In particular, it has not yet been decided whether existing chunks should be updated in place or regenerated through the canonical ingestion path.
+
+[Back to top](#navigation)
 
 ---
 
 ## 6. RR Reference Preflight
 
-RR SHOULD invoke a Memory Steward Reference preflight before starting each relevant agent step.
+RR SHOULD call a dedicated Reference preflight operation before each relevant RR agent step.
 
-This is RR-specific behavior and SHOULD therefore have an RR-specific MCP tool name, for example:
+The preflight is RR-specific orchestration behavior.
 
-`rr.reference.preflight`
+A working tool name is:
 
-The exact public name is still to be finalized.
+~~~text
+rr.reference.preflight
+~~~
 
-The tool SHOULD be visible only to authorized RR runtimes/capability sessions and SHOULD NOT automatically appear through unrelated MCP gateway consumers.
+The final name is not yet normative.
 
-### 6.1 Preflight input
+### 6.1 Input
 
-RR sends the relevant context of the upcoming agent step.
+RR supplies the relevant context already available for the upcoming agent step.
 
-The input may include:
+The input should include, where applicable:
 
-- role;
-- stage;
+- agent role;
+- execution stage;
 - objective;
-- actual task/instructions being given to the worker;
+- actual task or instruction that will be given to the worker;
+- relevant project/runtime facts;
 - language;
-- runtime/platform;
-- relevant technologies/features;
-- other bounded facts already known by RR about the work.
+- platform;
+- technologies;
+- constraints.
 
-`project_id` MAY remain part of the surrounding transport/session contract, but Reference Memory MUST NOT use it as a corpus namespace or cause duplicate Reference data per project.
+RR supplies task context.
 
-RR does not choose individual books or documents.
+RR does not select books, documents, or chunks.
 
-RR describes the work that is about to happen.
+### 6.2 Selection responsibility
 
-### 6.2 Preflight selection
+Memory Steward compares the supplied task context with the Reference Catalog.
 
-Memory Steward evaluates the upcoming task against the Reference Catalog.
+The intended proposed flow is:
 
-Selection SHOULD use a bounded pipeline:
+~~~mermaid
+sequenceDiagram
+    participant RR
+    participant MS as Memory Steward
+    participant CAT as Reference Catalog
+    participant SEL as Selector
+    participant AG as RR Worker
 
-1. construct a candidate document set from catalog metadata;
-2. perform deterministic narrowing where useful;
-3. run a small selector/classifier model over the bounded candidates;
-4. rank the candidates;
-5. select a configurable top-N set.
+    RR->>MS: Upcoming worker context
+    MS->>CAT: Obtain candidate document descriptors
+    CAT-->>MS: Catalog candidates
+    MS->>SEL: Task context + bounded candidates
+    SEL-->>MS: Ranked documents
+    MS-->>RR: Detailed top-N + compact remainder
+    RR->>AG: Start worker with Reference menu
+~~~
 
-The selector model is advisory retrieval logic. It MUST NOT modify Reference Memory.
+A relatively small model MAY be used as the final selector/classifier.
 
-`top-N` MUST be configurable/budget-driven rather than permanently hard-coded to a specific number.
+The selector does not modify Reference Memory.
+
+The selected count SHOULD be configuration- or budget-driven rather than hard-coded permanently to a literal value such as ten.
+
+If the catalog later becomes too large to present directly to the selector, Memory Steward MAY first reduce the candidate set.
+
+That candidate-reduction mechanism is an internal implementation concern and is not yet specified.
+
+[Back to top](#navigation)
 
 ---
 
-## 7. Preflight Response
+## 7. Reference Discovery and Catalog Lookup
 
-The preflight response SHOULD expose two levels.
+The preflight result SHOULD contain two disclosure levels.
 
-### 7.1 Selected references
+### 7.1 Selected documents
 
-The top-N selected documents receive richer catalog information sufficient for the agent to understand why they may be useful.
+The selected top-N documents receive the richer catalog metadata needed by the worker.
 
 This may include:
 
 - `document_id`;
 - title;
-- source/product/version;
-- short abstract;
+- product/version/source;
 - summary;
-- useful structure/topics where available.
+- useful topics or keywords;
+- useful structural metadata.
 
-This is the agent's initial Reference Memory "menu".
+This is the detailed initial Reference menu.
 
-It is metadata, not bulk document content.
+It is not the document body and does not replace semantic chunk search.
 
-### 7.2 Additional available references
+### 7.2 Remaining documents
 
-Documents not selected into top-N but still considered relevant candidates SHOULD remain discoverable through a compact representation.
+The remaining available documents are exposed compactly.
 
-The compact representation SHOULD contain only enough information for the agent to recognize that additional material exists.
+The purpose is discoverability: the worker should know that additional material exists even when it was not selected into the detailed top-N set.
 
-It MUST NOT dump full summaries for the entire catalog into the agent context.
+The compact representation should contain only enough information to recognize and identify the document.
 
-The response may group additional material when that reduces context size without hiding availability.
+The exact compact fields remain to be finalized.
 
----
+### 7.3 Catalog lookup
 
-## 8. Catalog Lookup Tool
+A second proposed tool allows the worker to expand one compact catalog entry.
 
-Add a general read-only catalog lookup tool, tentatively:
+Working name:
 
-`memory.reference.catalog.get`
+~~~text
+memory.reference.catalog.get
+~~~
 
 Input:
 
-- `document_id`.
+~~~text
+document_id
+~~~
 
-Output:
+The operation returns the complete current catalog metadata for that document.
 
-- the complete current catalog metadata for that document.
+The resulting interaction is:
 
-This allows an agent to expand one of the compact entries returned by preflight without retrieving arbitrary chunks yet.
+~~~mermaid
+flowchart LR
+    Preflight[RR Reference Preflight]
+    Menu[Detailed Top-N + Compact Remainder]
+    CatalogGet[Reference Catalog Get]
+    Search[Existing Reference Search]
+    ChunkGet[Existing Reference Get]
 
-This tool is general Reference Memory functionality and does not need to be RR-specific.
+    Preflight --> Menu
+    Menu --> CatalogGet
+    Menu --> Search
+    CatalogGet --> Search
+    Search --> ChunkGet
+~~~
 
----
+The existing `memory.reference.search` remains the semantic search operation.
 
-## 9. Existing Reference Search
-
-The existing:
-
-`memory.reference.search`
-
-MUST remain the semantic content-search mechanism.
-
-No duplicate search tool is required.
-
-The intended interaction becomes:
-
-1. RR calls `rr.reference.preflight`;
-2. agent receives selected Reference metadata plus discovery information;
-3. agent may expand catalog metadata using `memory.reference.catalog.get`;
-4. agent searches actual document content using existing `memory.reference.search`;
-5. exact chunks remain retrievable through the existing Reference get path.
-
-Catalog discovery and semantic chunk search remain separate responsibilities.
+[Back to top](#navigation)
 
 ---
 
-## 10. Manual Configuration
+## 8. MCP Access Boundary
 
-The design SHOULD minimize hand-maintained classification.
+`rr.reference.preflight` is RR-specific.
 
-Document title, abstract, summary, keywords, and structural metadata SHOULD be generated automatically during ingestion whenever practical.
+It MUST NOT become available to unrelated MCP clients merely because those clients are allowed to read Reference Memory.
 
-Manual policy SHOULD be reserved for information that is genuinely organizational intent rather than derivable document content.
+The intended policy is:
 
-Examples may eventually include:
+- authorized RR runtime: preflight allowed;
+- ordinary Reference consumer: preflight unavailable;
+- ordinary authorized agent: Reference catalog/search/get access according to its existing capability policy.
 
-- named Reference collections;
-- explicit exclusions;
-- source trust policy;
-- fixed version requirements;
-- specialized RR routing policy.
+Tool visibility and direct-call authorization MUST agree.
 
-Collections or role mappings SHOULD NOT be made mandatory for the first catalog implementation if direct catalog-based preflight selection is sufficient.
+Hiding a tool from discovery without preventing direct invocation is insufficient.
 
----
+The exact gateway/capability implementation is outside this working note and remains subject to the existing MCP authorization design.
 
-## 11. Re-Cataloging Existing Reference Memory
-
-Existing Reference Memory MUST be migratable without requiring all source material to be manually re-entered.
-
-A re-catalog operation SHOULD be provided.
-
-Preferred behavior:
-
-1. enumerate known sources from existing ingestion provenance and current Qdrant payloads;
-2. reconstruct unique document identities;
-3. obtain source content again where required for enrichment;
-4. create catalog records;
-5. assign stable `document_id` values;
-6. update/re-ingest Qdrant chunks so each point carries `document_id`;
-7. validate catalog-to-Qdrant consistency.
-
-The process MUST be restartable and observable.
-
-A partial failure MUST NOT silently leave catalog and chunk state appearing complete.
+[Back to top](#navigation)
 
 ---
 
-## 12. Required Diagnostics
+## 9. Durable Backup Path
 
-Reference diagnostics SHOULD be extended to show at least:
+The existing PostgreSQL dump and Qdrant snapshot mechanisms SHOULD remain the basis of Memory Steward backup.
 
-- document count;
-- chunk count;
-- documents by product/version;
-- chunks per document;
-- documents lacking enrichment;
-- documents lacking `document_id` chunk binding;
-- orphaned catalog records;
-- Qdrant chunks whose `document_id` does not resolve;
-- duplicate/current-version anomalies;
-- last catalog/enrichment time.
+The desired backup path is:
 
-The existing distinction between ingestion history and current-state inventory MUST remain explicit.
+~~~mermaid
+flowchart LR
+    PG[(Postgres)]
+    QD[(Qdrant)]
+    Backup[Backup Generation]
+    Local[(Local Backup Storage)]
+    MinIO[(MinIO)]
+    Remote[(S3 / R2)]
+
+    PG --> Backup
+    QD --> Backup
+    Backup --> Local
+    Local --> MinIO
+    MinIO --> Remote
+~~~
+
+The intent is to provide multiple recovery boundaries:
+
+- local retained backup for fast recovery;
+- MinIO object-storage copy;
+- independent S3/R2 copy outside the local infrastructure failure domain.
+
+The external provider is not yet fixed.
+
+AWS S3 and Cloudflare R2 are both acceptable target classes for later selection.
+
+### 9.1 Existing restore compatibility
+
+The current restore design already understands a manifest referring to:
+
+- PostgreSQL dump;
+- Qdrant snapshot;
+- SHA-256 for each object.
+
+The backup publication work SHOULD reuse this recovery representation rather than invent an unrelated backup format.
+
+The manifest should become visible as the current recoverable backup only after the corresponding backup objects have been successfully published.
+
+### 9.2 Backup scope
+
+Postgres and Qdrant are definitely in scope.
+
+The exact treatment of additional MinIO-resident Memory Steward data remains an open decision.
+
+Reconstructible derived objects and non-reconstructible retained state should not be treated as equivalent without an explicit decision.
+
+[Back to top](#navigation)
 
 ---
 
-## 13. Backup and Off-Host Replication
+## 10. Required Implementation Work
 
-Memory Steward persistent state needs a real backup path.
+### 10.1 Reference Catalog
 
-The first priority is retained state whose loss would require expensive reconstruction or would lose non-reconstructible information.
+Required work:
 
-At minimum this includes:
+- define canonical document identity;
+- add Postgres catalog schema;
+- persist stable document metadata;
+- persist generated document metadata;
+- add `document_id` linkage to Reference chunks.
 
-- Postgres;
-- Qdrant.
+### 10.2 Ingestion
 
-This automatically covers the new Reference Catalog once implemented because it resides in Postgres.
+Required work:
 
-Other persistent object data SHOULD be included when it contains non-reconstructible state. Derived CodeGraph generations may remain lower priority if they are reproducible from immutable source artifacts.
+- integrate catalog creation with the existing shared ingestion path;
+- extract deterministic document metadata;
+- add bounded enrichment where needed;
+- preserve existing chunking/embedding behavior unless separately changed.
 
-### 13.1 Backup flow
+### 10.3 Existing corpus
 
-Preferred architecture:
+Required work:
 
-`Postgres/Qdrant -> local MinIO backup set -> remote S3-compatible replication`
+- re-catalog existing Reference documents;
+- establish document identity;
+- associate existing Reference chunks with catalog documents.
 
-Remote destination may be:
+### 10.4 RR integration
+
+Required work:
+
+- define the RR preflight request contract;
+- add RR-specific preflight tool;
+- classify/rank catalog documents;
+- return detailed top-N documents;
+- return compact discovery information for remaining documents;
+- invoke preflight before relevant RR worker steps.
+
+### 10.5 Catalog access
+
+Required work:
+
+- add exact document catalog lookup by `document_id`;
+- retain existing Reference semantic search/get tools.
+
+### 10.6 MCP boundary
+
+Required work:
+
+- restrict RR preflight to authorized RR consumers;
+- prevent unrelated MCP gateway clients from discovering or invoking it.
+
+### 10.7 Backup
+
+Required work:
+
+- retain existing PostgreSQL and Qdrant backup generation;
+- automate publication of the resulting backup set to MinIO;
+- automate replication from MinIO to an independent S3-compatible destination;
+- preserve compatibility with the existing restore manifest format.
+
+[Back to top](#navigation)
+
+---
+
+## 11. Explicit Non-Goals
+
+This proposal does not authorize:
+
+- project-scoping canonical Reference Memory;
+- duplicating Reference documents for individual RR projects;
+- merging `agent_reference` with Reference Memory;
+- replacing Qdrant semantic search with Postgres;
+- replacing `memory.reference.search`;
+- replacing `memory.reference.get`;
+- copying full document metadata onto every Qdrant chunk;
+- introducing a second Reference ingestion scheduler;
+- adding OCR;
+- changing existing chunk identity or deduplication semantics without a separate decision;
+- selecting AWS S3 versus Cloudflare R2 in this document;
+- silently changing backup scope beyond the explicitly approved persistent data.
+
+[Back to top](#navigation)
+
+---
+
+## 12. Open Decisions
+
+### 12.1 Document identity and current Qdrant point identity
+
+Current Qdrant point identity is content-derived and does not include source-document identity.
+
+Before one `document_id` is attached to every point, the required behavior for identical content appearing in multiple documents must be decided.
+
+No behavior is selected by this document.
+
+### 12.2 Exact MCP names
+
+Working names are:
+
+~~~text
+rr.reference.preflight
+memory.reference.catalog.get
+~~~
+
+The final names remain open.
+
+### 12.3 Compact discovery representation
+
+The exact fields returned for non-top-N documents remain open.
+
+The representation must be compact enough for startup context while giving the worker enough information to recognize useful additional material.
+
+### 12.4 Backup scope beyond Postgres and Qdrant
+
+Need an explicit decision on whether additional MinIO-resident Memory Steward/CodeGraph artifacts require independent backup or may remain reconstructible derived state.
+
+### 12.5 External object-storage target
+
+Need a later deployment decision between:
 
 - AWS S3;
 - Cloudflare R2;
-- another approved S3-compatible store.
+- another compatible independent target.
 
-The exact remote provider is configuration, not architecture.
+This decision does not need to alter the logical backup representation.
 
-### 13.2 Backup set
-
-Each backup run SHOULD create an internally consistent backup set containing:
-
-- Postgres dump;
-- Qdrant snapshot;
-- manifest;
-- hashes;
-- source/runtime version information necessary for restoration.
-
-The backup set MUST be complete locally before remote synchronization begins.
-
-Remote replication MUST NOT publish a partially generated backup as a successful complete backup.
-
-### 13.3 Retention
-
-Local and remote retention MUST be explicit and independently configurable.
-
-The implementation SHOULD support:
-
-- short local retention for fast recovery;
-- longer remote retention for host/site loss.
-
-### 13.4 Validation
-
-Backup success MUST NOT mean only "upload command exited zero".
-
-The system MUST validate:
-
-- expected backup objects exist;
-- hashes match;
-- backup manifest is complete;
-- remote synchronization completed.
-
-Periodic restore testing SHOULD be implemented.
-
-A restore procedure SHOULD be able to restore into an isolated environment and verify:
-
-- Postgres schema/data;
-- Reference Catalog;
-- Qdrant collection;
-- catalog/chunk consistency;
-- Memory Steward health after restoration.
+[Back to top](#navigation)
 
 ---
 
-## 14. Security and Access
+## 13. Recommendations
 
-Reference ingestion and catalog mutation remain operator/control-plane operations.
+The Reference Catalog SHOULD be implemented as an extension of the existing ingestion content plane rather than as a separate ingestion system.
 
-Ordinary agents MUST receive only read capabilities.
+Postgres SHOULD own canonical document-level catalog metadata.
 
-`rr.reference.preflight` MUST be restricted to authorized RR callers.
+Qdrant SHOULD remain the semantic chunk index.
 
-MCP tool visibility and direct invocation authorization MUST enforce the same policy.
+RR SHOULD supply authoritative upcoming-worker context but SHOULD NOT own Reference selection policy.
 
-Backup credentials MUST NOT be stored in repository manifests.
+Memory Steward SHOULD own Reference classification and selection.
 
-Remote backup credentials SHOULD use the minimum permissions required for the configured backup prefix/bucket.
+The initial agent context SHOULD contain detailed information for the selected top-N documents and compact discovery information for the rest.
 
----
+Actual Reference content SHOULD continue to be retrieved on demand through the existing Reference search/get operations.
 
-## 15. Near-Term Implementation Order
+The backup work SHOULD extend the existing PostgreSQL dump, Qdrant snapshot, and restore-manifest design rather than replace it.
 
-1. Add the Reference Document Catalog schema and migration.
-2. Add stable `document_id` generation and Qdrant chunk binding.
-3. Extend ingestion with deterministic document metadata extraction.
-4. Add bounded optional model enrichment.
-5. Improve PDF structure extraction where available.
-6. Add re-catalog/re-ingest support for the existing corpus.
-7. Add catalog consistency diagnostics.
-8. Add `memory.reference.catalog.get`.
-9. Add RR-specific `rr.reference.preflight`.
-10. Add RR-side preflight invocation before relevant agent steps.
-11. Restrict the RR-specific preflight tool through MCP capability/tool policy.
-12. Add local Postgres + Qdrant backup generation into MinIO.
-13. Add remote S3/R2 synchronization.
-14. Add backup integrity checks and isolated restore validation.
-15. Update canonical Reference Memory and extension documentation in the same implementation patches.
+[Back to top](#navigation)
 
 ---
 
-## 16. Acceptance Criteria
+## 14. Closing Statement
 
-Reference Catalog work is complete only when:
+The near-term Reference Memory work separates document discovery from semantic content retrieval.
 
-- every newly ingested Reference document has one canonical catalog identity;
-- every newly written Reference chunk resolves to a valid `document_id`;
-- catalog metadata is generated without ordinary manual intervention;
-- Reference semantic search behavior remains functional;
-- repeated ingestion has defined, testable catalog/version behavior;
-- existing Reference data can be re-cataloged;
-- RR can obtain a task-specific Reference preflight result before an agent step;
-- the preflight result contains a bounded selected set and bounded discovery information;
-- ordinary agents can inspect catalog records and use existing semantic search;
-- Reference Memory remains global rather than project-scoped;
-- RR-specific preflight access is capability-restricted;
-- Postgres and Qdrant have automated backups;
-- backups are copied off-host;
-- restoration is tested, not merely assumed.
+Postgres provides a canonical document catalog.
+
+Qdrant provides semantic chunk retrieval.
+
+RR supplies the context of the upcoming agent step.
+
+Memory Steward selects and describes likely useful Reference documents.
+
+The worker receives a bounded initial menu while retaining visibility into the broader corpus and the existing ability to search it on demand.
+
+The backup work extends the current local recovery mechanism into a multi-boundary recovery path using MinIO followed by an independent S3-compatible copy.
+
+[Back to top](#navigation)
 
 ---
 
-## 17. Recommendations / Notes
-
-The first implementation SHOULD stay deliberately narrow.
-
-Do not introduce a new retrieval engine.
-
-Do not duplicate document-level metadata across tens of thousands of Qdrant chunks.
-
-Do not require humans to maintain summaries or keywords for every document.
-
-Do not bind canonical Reference Memory to RR project identity.
-
-Do not replace existing `memory.reference.search`.
-
-Use Postgres as the canonical document/catalog store and Qdrant as the semantic chunk index.
-
-Treat the selector model as a bounded classification/ranking component inside Memory Steward, not as another autonomous RR worker.
-
-Keep deterministic extraction ahead of model-generated enrichment.
-
-Make backup restoration a tested operational capability before treating remote replication as complete.
+**END OF DOCUMENT**
