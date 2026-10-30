@@ -50,6 +50,7 @@ BASE_AGENT_READ_TOOLS = frozenset(
         "memory.retrieve_context",
         "memory.reference.search",
         "memory.reference.get",
+        "memory.reference.catalog.get",
     }
 )
 
@@ -85,7 +86,13 @@ AGENT_CODEGRAPH_TOOLS = frozenset(
     }
 )
 
-PROJECT_SCOPED_NATIVE_TOOLS = BASE_AGENT_READ_TOOLS
+PROJECT_SCOPED_NATIVE_TOOLS = frozenset(
+    {
+        "memory.retrieve_context",
+        "memory.reference.search",
+        "memory.reference.get",
+    }
+)
 
 
 class CapabilitySessionError(RuntimeError):

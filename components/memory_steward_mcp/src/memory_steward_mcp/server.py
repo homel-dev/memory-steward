@@ -19,6 +19,7 @@ from memory_steward_mcp.content_plane import _ingest_document_internal, register
 from memory_steward_mcp.diagnostics_plane import register_diagnostics_tools
 from memory_steward_mcp.git_plane import register_git_tools
 from memory_steward_mcp.metrics import render as render_metrics
+from memory_steward_mcp.reference_catalog import register_reference_catalog_tools
 from memory_steward_mcp.stability_plane import register_stability_tools
 
 # Configure Logging
@@ -86,6 +87,7 @@ if qdrant:
 
 register_stability_tools(mcp)
 register_agent_tools(mcp)
+register_reference_catalog_tools(mcp)
 register_codegraph_plane(mcp)
 
 # ==============================================================================

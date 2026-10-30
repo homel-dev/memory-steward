@@ -6,7 +6,8 @@ content inspection, cache control, and provenance tracking.
 
 Key invariants (Doc 03):
 - Reference memory is always versioned, scoped, and attributed.
-- Ingestion is idempotent: same content + product + version = same chunk_id.
+- Document identity is stable for product + version + source.
+- Chunk identity is stable within one document and includes chunk ordinal + content hash.
 - Provenance is recorded in Postgres reference_ingestion table.
 - embed_fn calls POST /embed with {"texts": [...]} (not bare /embed with {"text": ...}).
 """
@@ -17,7 +18,6 @@ import logging
 import os
 import re
 import time
-import uuid
 from io import BytesIO
 from urllib.parse import urlsplit
 
@@ -36,6 +36,11 @@ from memory_steward_mcp.ingest_jobs import (
     list_jobs,
     request_cancel,
     retry_job,
+)
+from memory_steward_mcp.reference_catalog import (
+    reference_chunk_id,
+    reference_document_id,
+    upsert_reference_document,
 )
 
 log = logging.getLogger("memory-steward-mcp.content")
@@ -70,16 +75,6 @@ def _ref_key(product: str, version: str, content: str) -> str:
         f"{product}:{version}:{content}".encode()
     ).hexdigest()[:32]
     return f"ref:{product}:{version}:{fingerprint}"
-
-
-def _chunk_id(product: str, version: str, content: str) -> str:
-    """Deterministic, stable Qdrant point ID.
-
-    Qdrant only accepts unsigned-int or UUID point IDs; a string like
-    'ref:product:version:hash' is rejected at upsert. We derive a UUIDv5 from
-    the human-readable ref key so the ID is valid AND idempotent (same content
-    always maps to the same UUID)."""
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, _ref_key(product, version, content)))
 
 
 _DOCUMENT_HEADING_RE = re.compile(
@@ -389,6 +384,7 @@ def _ingest_reference_content(
     if not chunks:
         raise ValueError("No content extracted — check the source text.")
 
+    document_id = reference_document_id(product, version, source_url)
     total = len(chunks)
     processed = 0
     upserted = 0
@@ -413,11 +409,12 @@ def _ingest_reference_content(
             chunk_index = start + offset
             points.append(
                 PointStruct(
-                    id=_chunk_id(product, version, chunk["content"]),
+                    id=reference_chunk_id(document_id, chunk_index, chunk["content"]),
                     vector={"dense": vec},
                     payload={
                         "memory_type": "reference_memory",
                         "ref_key": _ref_key(product, version, chunk["content"]),
+                        "document_id": document_id,
                         "product": product,
                         "version": version,
                         "scope": scope,
@@ -440,6 +437,12 @@ def _ingest_reference_content(
         if progress_fn is not None:
             progress_fn(total, processed, upserted)
 
+    upsert_reference_document(
+        text=text,
+        product=product,
+        version=version,
+        source=source_url,
+    )
     if record_provenance:
         _record_provenance(product, version, scope, source_url, total, upserted)
     return {"chunk_count": total, "processed_chunks": processed, "upserted_count": upserted}
