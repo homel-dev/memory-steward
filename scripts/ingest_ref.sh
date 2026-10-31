@@ -42,27 +42,27 @@ readonly BOOKS_VERSION="${BOOKS_VERSION:-${BOOKS_REF}}"
 readonly -a PROJECTS=(
   # Base Kubernetes / Crossplane / kro reference sources.
   'kubernetes|Kubernetes 1.37 reference|github-public|kubernetes/website|kubernetes|1.37|content/en/docs/reference|7a1c866f252e2d62a0bcdd3ea23a0052e6674679|.md'
- # 'crossplane|Crossplane 2.4 documentation|github-public|crossplane/docs|crossplane|2.4|content/v2.4|d1c9eb7fd1548d0d61ab3901781919a5b4aaf69d|.md'
- # 'kro|Kro 0.10.0|github-public|kubernetes-sigs/kro|kro|0.10.0|website/versioned_docs/version-0.10.0-rc.0|0e8582fd9307bcdba6fe5d6b34becd3f41f4590a|.md'
+  'crossplane|Crossplane 2.4 documentation|github-public|crossplane/docs|crossplane|2.4|content/v2.4|d1c9eb7fd1548d0d61ab3901781919a5b4aaf69d|.md'
+  'kro|Kro 0.10.0|github-public|kubernetes-sigs/kro|kro|0.10.0|website/versioned_docs/version-0.10.0-rc.0|0e8582fd9307bcdba6fe5d6b34becd3f41f4590a|.md'
 
   # UNICOP product documentation.
-#  'netbox|NetBox 4.7.2|github-public|netbox-community/netbox|netbox|4.7.2|docs|v4.7.2|.md'
-#  'kafka|Apache Kafka 4.2.2|github-public|apache/kafka|kafka|4.2.2|docs|4.2.2|.md'
-#  'awx|AWX 24.6.1|github-public|ansible/awx|awx|24.6.1|docs|24.6.1|.md'
-#  'eda|Ansible EDA server snapshot 2026-10-01|github-public|ansible/eda-server|eda-server|main-2026-10-01|docs|1ca0232000b39bf5f9e2ed1ece3703f10ae2b7ec|.md'
-#  'bind9|BIND 9.20.29 ARM including DLZ|github-public|isc-projects/bind9|bind9|9.20.29|doc/arm|v9.20.29|.rst'
+  'netbox|NetBox 4.7.2|github-public|netbox-community/netbox|netbox|4.7.2|docs|v4.7.2|.md'
+  'kafka|Apache Kafka 4.2.2|github-public|apache/kafka|kafka|4.2.2|docs|4.2.2|.md'
+  'awx|AWX 24.6.1|github-public|ansible/awx|awx|24.6.1|docs|24.6.1|.md'
+  'eda|Ansible EDA server snapshot 2026-10-01|github-public|ansible/eda-server|eda-server|main-2026-10-01|docs|1ca0232000b39bf5f9e2ed1ece3703f10ae2b7ec|.md'
+  'bind9|BIND 9.20.29 ARM including DLZ|github-public|isc-projects/bind9|bind9|9.20.29|doc/arm|v9.20.29|.rst'
   # Kubernetes deployment/operator documentation used by the platform.
-#  'strimzi|Strimzi Kafka Operator 1.2.0|github-public|strimzi/strimzi-kafka-operator|strimzi|1.2.0|documentation|1.2.0|.adoc'
-#  'awx-operator|AWX Operator 2.19.1|github-public|ansible/awx-operator|awx-operator|2.19.1|docs|2.19.1|.md'
-#  'eda-operator|Ansible EDA Server Operator snapshot 2026-10-01|github-public|ansible/eda-server-operator|eda-server-operator|main-2026-10-01|docs|a95bbf59c162f9b4dc0133e566a35b954d71d15d|.md'
+  'strimzi|Strimzi Kafka Operator 1.2.0|github-public|strimzi/strimzi-kafka-operator|strimzi|1.2.0|documentation|1.2.0|.adoc'
+  'awx-operator|AWX Operator 2.19.1|github-public|ansible/awx-operator|awx-operator|2.19.1|docs|2.19.1|.md'
+  'eda-operator|Ansible EDA Server Operator snapshot 2026-10-01|github-public|ansible/eda-server-operator|eda-server-operator|main-2026-10-01|docs|a95bbf59c162f9b4dc0133e566a35b954d71d15d|.md'
 #  'vault|HashiCorp Vault 2.1.1|github-public|hashicorp/web-unified-docs|vault|2.1.1|content/vault/v2.x/content|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
-#  'terraform|HashiCorp Terraform 1.16.4|github-public|hashicorp/web-unified-docs|terraform|1.16.4|content/terraform/v1.16.x/docs|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
-#  'homel-standards|Homel organization standards|github-public|homel-dev/.github|homel-standards|73dd3a1722cdc116e6c16f76e42ff07375c39b48|docs|73dd3a1722cdc116e6c16f76e42ff07375c39b48|.md'
+  'terraform|HashiCorp Terraform 1.16.4|github-public|hashicorp/web-unified-docs|terraform|1.16.4|content/terraform/v1.16.x/docs|4a2f1e91c61b169d2e882ab19b0c50491250b970|.mdx'
+  'homel-standards|Homel organization standards|github-public|homel-dev/.github|homel-standards|73dd3a1722cdc116e6c16f76e42ff07375c39b48|docs|73dd3a1722cdc116e6c16f76e42ff07375c39b48|.md'
 
   # Local GitLab software-engineering book corpus. Set BOOKS_PROJECT to group/repo.
   "software-books|Software engineering reference books|${BOOKS_CONNECTION}|${BOOKS_PROJECT}|software-engineering-books|${BOOKS_VERSION}|books|${BOOKS_REF}|.pdf"
 
-#  'keycloak|Keycloak 26.8.0|github-public|keycloak/keycloak.github.io|keycloak|26.8.0|docs/26.8.0|5c19aed52054ed7c6424a88330a51cb589f251b0|.html'
+  'keycloak|Keycloak 26.8.0|github-public|keycloak/keycloak.github.io|keycloak|26.8.0|docs/26.8.0|5c19aed52054ed7c6424a88330a51cb589f251b0|.html'
 )
 
 fail() {
