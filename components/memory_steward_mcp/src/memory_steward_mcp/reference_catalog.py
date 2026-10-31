@@ -193,17 +193,22 @@ def list_reference_documents() -> list[dict[str, Any]]:
 
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
-    response = requests.post(
-        f"{EMBEDDINGS_URL}/embed",
-        json={"texts": texts, "normalize": True},
-        timeout=60,
-    )
-    response.raise_for_status()
-    vectors = response.json()["vectors"]
-    if len(vectors) != len(texts):
-        raise RuntimeError(
-            f"embeddings returned {len(vectors)} vectors for {len(texts)} texts"
+    batch_size = int(os.environ.get("REFERENCE_EMBED_BATCH_SIZE", "8"))
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        batch = texts[start : start + batch_size]
+        response = requests.post(
+            f"{EMBEDDINGS_URL}/embed",
+            json={"texts": batch, "normalize": True},
+            timeout=60,
         )
+        response.raise_for_status()
+        batch_vectors = response.json()["vectors"]
+        if len(batch_vectors) != len(batch):
+            raise RuntimeError(
+                f"embeddings returned {len(batch_vectors)} vectors for {len(batch)} texts"
+            )
+        vectors.extend(batch_vectors)
     return vectors
 
 
