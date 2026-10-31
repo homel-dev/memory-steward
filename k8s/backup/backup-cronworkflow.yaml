@@ -4,7 +4,8 @@ metadata:
   name: memory-steward-backup
   namespace: ms
 spec:
-  schedule: "0 3 * * *"
+  schedules:
+    - "0 3 * * *"
   timezone: UTC
   concurrencyPolicy: Forbid
   workflowSpec:
