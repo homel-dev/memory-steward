@@ -280,7 +280,6 @@ class RrReferencePreflightRequest(_StrictModel):
     task: _Task
     project_context: _ProjectContext
     workspace_policy: _WorkspacePolicy
-    capabilities: _Capabilities
 
 
 def _preflight_query(request: RrReferencePreflightRequest) -> str:
@@ -364,7 +363,6 @@ def register_reference_catalog_tools(mcp: FastMCP) -> None:
         task: dict[str, Any],
         project_context: dict[str, Any],
         workspace_policy: dict[str, Any],
-        capabilities: dict[str, Any],
     ) -> str:
         """Select Reference catalog documents for one trusted RR worker invocation."""
         request = RrReferencePreflightRequest.model_validate(
@@ -375,7 +373,6 @@ def register_reference_catalog_tools(mcp: FastMCP) -> None:
                 "task": task,
                 "project_context": project_context,
                 "workspace_policy": workspace_policy,
-                "capabilities": capabilities,
             }
         )
         return json.dumps(run_reference_preflight(request), ensure_ascii=False, indent=2)
