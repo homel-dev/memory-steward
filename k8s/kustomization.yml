@@ -11,6 +11,7 @@ resources:
   - reference-ingest-worker.yaml
   - memory-steward-list.yaml
   - codegraph-control.yaml
+  - codegraph-workspace-events-rbac.yaml
   - codegraph-workflowtemplate.yaml
   - open-webui.yml
   - runtime-contract.yaml

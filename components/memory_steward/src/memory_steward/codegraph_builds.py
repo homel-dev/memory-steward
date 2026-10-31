@@ -138,10 +138,11 @@ class CodeGraphBuildStore:
                   source_uid,
                   artifact_revision,
                   artifact_digest,
+                  artifact_url,
                   source_event,
                   state
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'received')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'received')
                 ON CONFLICT (source_namespace, source_kind, source_name, artifact_digest) DO NOTHING
                 RETURNING id::text
                 """,
@@ -153,6 +154,7 @@ class CodeGraphBuildStore:
                     event.source_uid,
                     event.artifact_revision,
                     event.artifact_digest,
+                    (event.payload.get("artifact_url") if event.source_kind == "RRWorkspace" else None),
                     json.dumps(event.payload, separators=(",", ":")),
                 ),
             )
@@ -187,13 +189,13 @@ class CodeGraphBuildStore:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT b.id::text, b.generation_bucket, b.generation_key,
-                       b.result, b.source_name
+                       b.result, b.source_name, b.source_kind
                 FROM codegraph_builds b
                 WHERE b.state = 'succeeded'
                   AND b.generation_bucket IS NOT NULL
                   AND b.generation_key IS NOT NULL
                   AND b.result IS NOT NULL
-                  AND NOT EXISTS (
+                  AND (b.source_kind = 'RRWorkspace' OR NOT EXISTS (
                     SELECT 1 FROM codegraph_builds newer
                     WHERE newer.source_namespace = b.source_namespace
                       AND newer.source_kind = b.source_kind
@@ -203,15 +205,26 @@ class CodeGraphBuildStore:
                       AND newer.generation_key IS NOT NULL
                       AND newer.result IS NOT NULL
                       AND (newer.received_at, newer.id) > (b.received_at, b.id)
-                  )
+                  ))
                 ORDER BY b.source_namespace, b.source_name
             """)
             return [
                 {"build_id": str(row[0]), "generation_bucket": row[1],
                  "generation_key": row[2], "result": row[3],
-                 "repository": row[4]}
+                 "repository": row[4], "source_kind": row[5]}
                 for row in cur.fetchall()
             ]
+
+    def mark_workspace_served(self, build_id: str, endpoint: str) -> bool:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE codegraph_builds SET worker_endpoint = %s, updated_at = now()
+                   WHERE id = %s::uuid AND source_kind = 'RRWorkspace'
+                     AND state = 'succeeded' AND generation_key IS NOT NULL
+                   RETURNING id""",
+                (endpoint, build_id),
+            )
+            return cur.fetchone() is not None
 
     def activate_serving_alias(self, build: dict[str, Any], endpoint: str) -> bool:
         """Record the READY generation only if it remains the newest Flux event."""

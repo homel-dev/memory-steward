@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: codegraph-workspace-events-reader
+  namespace: rr
+rules:
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: codegraph-workspace-events-reader
+  namespace: rr
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: codegraph-workspace-events-reader
+subjects:
+  - kind: ServiceAccount
+    name: codegraph-controller
+    namespace: ms

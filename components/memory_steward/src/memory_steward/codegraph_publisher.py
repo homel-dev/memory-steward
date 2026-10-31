@@ -37,7 +37,7 @@ class CodeGraphPublisher:
             if exc.status != 409:
                 raise
 
-    def ensure(self, build: Any) -> str | None:
+    def ensure(self, build: Any, *, create_alias: bool = True) -> str | None:
         name = service_name(build["build_id"])
         if not build["generation_bucket"] or not build["generation_key"]:
             raise RuntimeError(f"CodeGraph build {build['build_id']} has no generation")
@@ -129,6 +129,9 @@ class CodeGraphPublisher:
             # An old ReplicaSet may still be Ready during a rollout; don't
             # switch repository:latest until the new template is fully Ready.
             return None
+
+        if not create_alias:
+            return f"http://{name}.{self.namespace}.svc.cluster.local:8094"
 
         repository = str(build["repository"])
         alias = alias_name(repository)

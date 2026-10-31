@@ -281,6 +281,14 @@ def _run_codegraph(config: IndexWorkerConfig | FluxIndexWorkerConfig, repository
 
 def _download_flux_artifact(*, url: str, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
+    if url.startswith("s3://"):
+        from urllib.parse import urlsplit
+        parsed = urlsplit(url)
+        bucket, key = parsed.netloc, parsed.path.lstrip("/")
+        if not bucket or not key or parsed.query or parsed.fragment:
+            raise RuntimeError("invalid CodeGraph MinIO source URL")
+        _minio_client().fget_object(bucket, key, str(destination))
+        return
     with requests.get(url, stream=True, timeout=(10, 300)) as response:
         response.raise_for_status()
         with destination.open("wb") as output:

@@ -148,6 +148,7 @@ class CapabilityIssueRequest(BaseModel):
     realm: str = Field(min_length=1, max_length=64)
     repository: str | None = Field(default=None, max_length=512)
     revision: str = Field(min_length=40, max_length=40)
+    snapshot_digest: str | None = Field(default=None, pattern=r"^sha256:[0-9a-f]{64}$")
     role: str = Field(min_length=1, max_length=128)
     stage: str | None = Field(default=None, max_length=128)
     ttl_seconds: int = Field(default=3600, ge=60, le=86400)
@@ -262,6 +263,52 @@ class CapabilitySessionStore:
             index_profile=str(result["index_profile"]),
         ), {"build_id": build_id, "source_ref": source_ref, "bucket": row["generation_bucket"],
             "key": row["generation_key"], "revision": row["artifact_revision"], "result": result}
+
+    def workspace_generation_candidate(
+        self, *, project_id: str, run_id: str, realm: str,
+        repository: str, revision: str, snapshot_digest: str,
+    ) -> tuple[CodeGraphBinding, dict[str, Any]]:
+        if realm != "workspace":
+            raise ValueError("workspace snapshot requires realm=workspace")
+        realm, revision = self.validate_identity(realm=realm, revision=revision)
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", snapshot_digest):
+            raise ValueError("invalid workspace snapshot digest")
+        identity = json.dumps([project_id, repository], separators=(",", ":"))
+        source_name = "rr-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT id::text AS build_id, artifact_revision,
+                          generation_bucket, generation_key, result, worker_endpoint
+                   FROM codegraph_builds
+                   WHERE source_kind = 'RRWorkspace' AND source_namespace = 'rr'
+                     AND source_name = %s AND artifact_digest = %s
+                     AND source_event->>'project_id' = %s
+                     AND source_event->>'repository' = %s
+                     AND state = 'succeeded' AND worker_endpoint IS NOT NULL""",
+                (source_name, snapshot_digest, project_id, repository),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise CodeGraphUnavailable("READY CodeGraph for workspace snapshot not found")
+        if row["artifact_revision"] != revision:
+            raise CodeGraphUnavailable("workspace Git revision does not match snapshot")
+        result = row["result"]
+        if not isinstance(result, dict) or result.get("index_profile") != "full":
+            raise CodeGraphUnavailable("workspace generation is not a full CodeGraph index")
+        return CodeGraphBinding(
+            registry_id=str(row["build_id"]), worker_generation=1,
+            worker_endpoint=str(row["worker_endpoint"]),
+            project_id=project_id, run_id=run_id, realm=realm,
+            repository=repository, revision=revision,
+            codegraph_version=str(result["codegraph_version"]),
+            index_profile="full",
+        ), {
+            "build_id": str(row["build_id"]),
+            "source_ref": str(result["source_ref"]),
+            "revision": revision,
+            "bucket": str(row["generation_bucket"]),
+            "key": str(row["generation_key"]),
+        }
 
     def latest_serving_candidate(
         self, *, project_id: str, run_id: str, realm: str, repository: str
@@ -928,15 +975,31 @@ def register_codegraph_plane(
             return JSONResponse({"detail": str(exc)}, status_code=400)
 
         try:
-            binding = await anyio.to_thread.run_sync(
-                lambda: resolved_store.find_ready_backend(
-                    project_id=payload.project_id,
-                    run_id=payload.run_id,
-                    realm=realm,
-                    repository=payload.repository,
-                    revision=revision,
+            if payload.snapshot_digest is not None:
+                if not payload.repository:
+                    raise ValueError("workspace snapshot capability requires repository")
+                candidate, generation = await anyio.to_thread.run_sync(
+                    lambda: resolved_store.workspace_generation_candidate(
+                        project_id=payload.project_id, run_id=payload.run_id,
+                        realm=realm, repository=payload.repository,
+                        revision=revision, snapshot_digest=payload.snapshot_digest,
+                    )
                 )
-            )
+                binding = await anyio.to_thread.run_sync(
+                    lambda: resolved_store.activate_flux_binding(
+                        candidate=candidate, generation=generation,
+                    )
+                )
+            else:
+                binding = await anyio.to_thread.run_sync(
+                    lambda: resolved_store.find_ready_backend(
+                        project_id=payload.project_id,
+                        run_id=payload.run_id,
+                        realm=realm,
+                        repository=payload.repository,
+                        revision=revision,
+                    )
+                )
             descriptors = await router.list_tools(binding)
             codegraph_tools = sorted(
                 {
@@ -958,7 +1021,7 @@ def register_codegraph_plane(
                     authorized_tools=authorized_tools,
                 )
             )
-        except CodeGraphUnavailable as exc:
+        except (CodeGraphUnavailable, ValueError) as exc:
             return JSONResponse({"detail": str(exc)}, status_code=409)
         except CodeGraphAmbiguous as exc:
             return JSONResponse({"detail": str(exc)}, status_code=409)

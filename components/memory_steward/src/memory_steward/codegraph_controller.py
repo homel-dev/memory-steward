@@ -5,6 +5,7 @@ import logging
 import os
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
@@ -20,6 +21,7 @@ from memory_steward.codegraph_metrics import refresh as refresh_metrics
 from memory_steward.codegraph_metrics import render as render_metrics
 from memory_steward.codegraph_publisher import CodeGraphPublisher
 from memory_steward.flux_source import FluxSourceClient, parse_flux_new_artifact
+from memory_steward.workspace_codegraph import WorkspaceEventWatcher, workspace_status
 
 log = logging.getLogger("memory-steward.codegraph-controller")
 
@@ -164,7 +166,8 @@ class CodeGraphController:
             raise RuntimeError("CodeGraph worker result key mismatch")
         if str(payload["codegraph_version"]) != self.codegraph_version:
             raise RuntimeError("CodeGraph worker result version mismatch")
-        if str(payload["index_profile"]) != self.index_profile:
+        expected_profile = "full" if build.source_kind == "RRWorkspace" else self.index_profile
+        if str(payload["index_profile"]) != expected_profile:
             raise RuntimeError("CodeGraph worker result profile mismatch")
         if str(payload["index_mode"]) != "full":
             raise RuntimeError("initial Flux CodeGraph build must be full")
@@ -174,7 +177,16 @@ class CodeGraphController:
         handled = 0
         for build in self.store.pending(limit=self.batch_size):
             try:
-                current = self.flux.get_artifact(self._event_from_build(build))
+                if build.source_kind == "RRWorkspace":
+                    if not build.artifact_url or not build.artifact_url.startswith("s3://"):
+                        raise RuntimeError("RR Workspace build has no MinIO source artifact")
+                    current = SimpleNamespace(
+                        url=build.artifact_url,
+                        revision=build.artifact_revision,
+                        digest=build.artifact_digest,
+                    )
+                else:
+                    current = self.flux.get_artifact(self._event_from_build(build))
                 if current.digest != build.artifact_digest or current.revision != build.artifact_revision:
                     detail = (
                         "Flux artifact was superseded before CodeGraph build: "
@@ -222,7 +234,7 @@ class CodeGraphController:
                     generation_key=generation_key,
                     worker_image=self.worker_image,
                     codegraph_version=self.codegraph_version,
-                    index_profile=self.index_profile,
+                    index_profile="full" if build.source_kind == "RRWorkspace" else self.index_profile,
                 )
                 submitted = self.store.mark_submitted(
                     build_id=build.build_id,
@@ -350,9 +362,13 @@ class CodeGraphController:
         if self.publisher is not None:
             for build in self.store.successful_generations():
                 try:
-                    endpoint = self.publisher.ensure(build)
+                    workspace = build["source_kind"] == "RRWorkspace"
+                    endpoint = self.publisher.ensure(build, create_alias=not workspace)
                     if endpoint:
-                        self.store.activate_serving_alias(build, endpoint)
+                        if workspace:
+                            self.store.mark_workspace_served(build["build_id"], endpoint)
+                        else:
+                            self.store.activate_serving_alias(build, endpoint)
                 except Exception:
                     log.exception("failed to publish CodeGraph serving endpoint build_id=%s", build["build_id"])
             # Run GC on every reconciliation, including after controller restart.
@@ -397,6 +413,16 @@ def create_app(
         refresh_metrics(store.telemetry_snapshot())
         payload, content_type = render_metrics()
         return Response(content=payload, media_type=content_type)
+
+    @app.get("/v1/codegraph/workspace-builds")
+    def workspace_build_status(project_id: str, repository: str, snapshot_digest: str) -> dict[str, Any]:
+        try:
+            return workspace_status(
+                store, project_id=project_id, repository=repository,
+                snapshot_digest=snapshot_digest,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/events/flux")
     def flux_event(
@@ -466,6 +492,12 @@ def main() -> None:
     log.info("codegraph_event=controller_start namespace=%s workflow_template=%s", namespace, controller.argo.workflow_template)
     thread = threading.Thread(target=controller.run_forever, name="codegraph-controller-loop", daemon=True)
     thread.start()
+    watcher = WorkspaceEventWatcher(
+        store,
+        namespace=os.environ.get("CODEGRAPH_WORKSPACE_EVENT_NAMESPACE", "rr"),
+        source_bucket=os.environ.get("CODEGRAPH_WORKSPACE_SOURCE_BUCKET", "codegraph"),
+    )
+    threading.Thread(target=watcher.run_forever, name="codegraph-workspace-events", daemon=True).start()
 
     app = create_app(
         controller,
