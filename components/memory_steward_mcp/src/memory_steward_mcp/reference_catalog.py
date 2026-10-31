@@ -124,16 +124,28 @@ def upsert_reference_document(
         version=version,
     )
     content_hash = reference_content_hash(text)
+    descriptor = _document_descriptor(
+        {
+            "title": title,
+            "product": product,
+            "version": version,
+            "source": source,
+            **metadata,
+        }
+    )
+    descriptor_embedding = _embed_texts([descriptor])[0]
     with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO reference_documents
-                (document_id, source, product, version, title, content_hash, metadata)
-            VALUES (%s::uuid, %s, %s, %s, %s, %s, %s::jsonb)
+                (document_id, source, product, version, title, content_hash, metadata,
+                 descriptor_embedding)
+            VALUES (%s::uuid, %s, %s, %s, %s, %s, %s::jsonb, %s::double precision[])
             ON CONFLICT (document_id) DO UPDATE
             SET title = EXCLUDED.title,
                 content_hash = EXCLUDED.content_hash,
                 metadata = EXCLUDED.metadata,
+                descriptor_embedding = EXCLUDED.descriptor_embedding,
                 updated_at = now()
             """,
             (
@@ -144,6 +156,7 @@ def upsert_reference_document(
                 title,
                 content_hash,
                 json.dumps(metadata, ensure_ascii=False),
+                descriptor_embedding,
             ),
         )
     return document_id
