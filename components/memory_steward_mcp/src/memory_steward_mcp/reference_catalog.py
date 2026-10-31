@@ -205,6 +205,20 @@ def list_reference_documents() -> list[dict[str, Any]]:
     return [_row_to_document(dict(row)) for row in rows]
 
 
+def _list_reference_documents_with_embeddings() -> list[tuple[dict[str, Any], list[float] | None]]:
+    with psycopg.connect(POSTGRES_DSN, row_factory=dict_row) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT document_id, source, product, version, title, content_hash,
+                   metadata, descriptor_embedding
+            FROM reference_documents
+            ORDER BY product, version, title, document_id
+            """
+        )
+        rows = cur.fetchall()
+    return [(_row_to_document(row), row["descriptor_embedding"]) for row in rows]
+
+
 def _embed_texts(texts: list[str]) -> list[list[float]]:
     batch_size = int(os.environ.get("REFERENCE_EMBED_BATCH_SIZE", "8"))
     vectors: list[list[float]] = []
@@ -329,20 +343,24 @@ def run_reference_preflight(
     *,
     selected_count: int = REFERENCE_PREFLIGHT_SELECTED_COUNT,
 ) -> dict[str, Any]:
-    documents = list_reference_documents()
-    if not documents:
+    catalog = _list_reference_documents_with_embeddings()
+    if not catalog:
         return {
             "schemaVersion": "rr-reference-preflight-result.v1",
             "selected_documents": [],
             "remaining_documents": [],
         }
 
-    query = _preflight_query(request)
-    descriptor_texts = [_document_descriptor(document) for document in documents]
-    vectors = _embed_texts([query, *descriptor_texts])
-    query_vector = vectors[0]
+    missing = sum(vector is None for _document, vector in catalog)
+    if missing:
+        raise RuntimeError(
+            f"{missing} Reference catalog documents are missing descriptor embeddings; "
+            "run the Reference descriptor embedding backfill first"
+        )
+
+    query_vector = _embed_texts([_preflight_query(request)])[0]
     ranked = sorted(
-        zip(documents, vectors[1:]),
+        ((document, vector) for document, vector in catalog if vector is not None),
         key=lambda item: (-_dot(query_vector, item[1]), item[0]["document_id"]),
     )
 
