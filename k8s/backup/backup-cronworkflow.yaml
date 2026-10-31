@@ -1,0 +1,71 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: memory-steward-backup
+  namespace: ms
+spec:
+  schedule: "0 3 * * *"
+  timezone: UTC
+  concurrencyPolicy: Forbid
+  workflowSpec:
+    entrypoint: backup-and-export
+    serviceAccountName: memory-tooling
+    volumes:
+      - name: backups
+        persistentVolumeClaim:
+          claimName: backups
+    templates:
+      - name: backup-and-export
+        steps:
+          - - name: backup
+              template: backup
+          - - name: export
+              template: export
+      - name: backup
+        container:
+          image: ghcr.io/homel-dev/memory-steward/tooling@sha256:814ae4ded385ff4700dce831e69f2434109963455324db31d2f79d0930819808
+          command: ["bash", "/opt/tooling/backup.sh"]
+          env:
+            - {name: PGHOST, value: "postgres"}
+            - {name: PGUSER, value: "homel"}
+            - {name: PGPASSWORD, value: "homel"}
+            - {name: PGDATABASE, value: "homel"}
+            - {name: QDRANT_URL, value: "http://qdrant:6333"}
+            - {name: QDRANT_COLLECTION, value: "homel_memory"}
+            - {name: RETAIN, value: "14"}
+          volumeMounts:
+            - {name: backups, mountPath: /backups}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 1Gi}
+      - name: export
+        container:
+          image: rclone/rclone:1.71.2
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              : "${MINIO_BACKUP_BUCKET:?MINIO_BACKUP_BUCKET is required}"
+              : "${RCLONE_CONFIG_MINIO_ACCESS_KEY_ID:?MinIO access key is required}"
+              : "${RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY:?MinIO secret key is required}"
+              prefix="${MINIO_BACKUP_BUCKET%/}/memory-steward/{{workflow.name}}"
+              rclone copy /backups "minio:${prefix}" --log-level INFO
+              rclone check /backups "minio:${prefix}" --one-way --log-level INFO
+              printf '%s\n' '{{workflow.name}}' | rclone rcat "minio:${prefix}/_BACKUP_COMPLETE"
+          env:
+            - {name: RCLONE_CONFIG_MINIO_TYPE, value: s3}
+            - {name: RCLONE_CONFIG_MINIO_PROVIDER, value: Minio}
+            - {name: RCLONE_CONFIG_MINIO_ENDPOINT, value: "http://minio.host-runtime.svc.cluster.local:9000"}
+            - name: RCLONE_CONFIG_MINIO_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: {name: memory-steward-backup-minio, key: access-key}
+            - name: RCLONE_CONFIG_MINIO_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: {name: memory-steward-backup-minio, key: secret-key}
+            - name: MINIO_BACKUP_BUCKET
+              valueFrom:
+                secretKeyRef: {name: memory-steward-backup-minio, key: bucket}
+          volumeMounts:
+            - {name: backups, mountPath: /backups, readOnly: true}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}

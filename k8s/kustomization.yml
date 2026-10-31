@@ -15,7 +15,7 @@ resources:
   - open-webui.yml
   - runtime-contract.yaml
   - ingress.yaml
-  - backup/backup-cronjob.yaml
+  - backup/backup-cronworkflow.yaml
   - alloy
   - oco-consumer
 
