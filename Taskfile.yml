@@ -151,6 +151,37 @@ tasks:
           || { kubectl logs job/tooling-qdrant-init -n {{.NAMESPACE}}; exit 1; }
         kubectl logs job/tooling-qdrant-init -n {{.NAMESPACE}}
 
+  db:reset-qdrant:
+    desc: "🔥 DESTRUCTIVE: delete and recreate the Qdrant collection only"
+    prompt: "This ERASES the entire Qdrant collection '{{.QDRANT_COLLECTION}}' but leaves Postgres unchanged. Continue?"
+    cmds:
+      - |
+        set -e
+        kubectl delete job tooling-qdrant-reset -n {{.NAMESPACE}} --ignore-not-found >/dev/null 2>&1 || true
+        cat <<EOF | kubectl apply -f - >/dev/null
+        apiVersion: batch/v1
+        kind: Job
+        metadata: {name: tooling-qdrant-reset, namespace: {{.NAMESPACE}}}
+        spec:
+          backoffLimit: 0
+          ttlSecondsAfterFinished: 180
+          template:
+            spec:
+              serviceAccountName: memory-tooling
+              restartPolicy: Never
+              containers:
+                - name: qdrant-reset
+                  image: {{.TOOLING_IMAGE}}
+                  imagePullPolicy: Always
+                  command: ["bash","/opt/tooling/init_qdrant.sh","reset"]
+                  env:
+                    - {name: QDRANT_URL,        value: "http://qdrant:6333"}
+                    - {name: QDRANT_COLLECTION, value: "{{.QDRANT_COLLECTION}}"}
+        EOF
+        kubectl wait --for=condition=complete job/tooling-qdrant-reset -n {{.NAMESPACE}} --timeout=180s \
+          || { kubectl logs job/tooling-qdrant-reset -n {{.NAMESPACE}}; exit 1; }
+        kubectl logs job/tooling-qdrant-reset -n {{.NAMESPACE}}
+
   db:reset:
     desc: "🔥 DESTRUCTIVE: drop & rebuild Postgres schema + Qdrant collection"
     prompt: "This ERASES all Postgres tables and the Qdrant collection. Continue?"

@@ -41,7 +41,7 @@ readonly BOOKS_VERSION="${BOOKS_VERSION:-${BOOKS_REF}}"
 
 readonly -a PROJECTS=(
   # Base Kubernetes / Crossplane / kro reference sources.
- # 'kubernetes|Kubernetes 1.37 reference|github-public|kubernetes/website|kubernetes|1.37|content/en/docs/reference|7a1c866f252e2d62a0bcdd3ea23a0052e6674679|.md'
+  'kubernetes|Kubernetes 1.37 reference|github-public|kubernetes/website|kubernetes|1.37|content/en/docs/reference|7a1c866f252e2d62a0bcdd3ea23a0052e6674679|.md'
  # 'crossplane|Crossplane 2.4 documentation|github-public|crossplane/docs|crossplane|2.4|content/v2.4|d1c9eb7fd1548d0d61ab3901781919a5b4aaf69d|.md'
  # 'kro|Kro 0.10.0|github-public|kubernetes-sigs/kro|kro|0.10.0|website/versioned_docs/version-0.10.0-rc.0|0e8582fd9307bcdba6fe5d6b34becd3f41f4590a|.md'
 
