@@ -5,4 +5,4 @@ resources:
   - qdrant-init-job.yaml
 images:
   - name: ghcr.io/homel-dev/memory-steward/tooling
-    digest: sha256:814ae4ded385ff4700dce831e69f2434109963455324db31d2f79d0930819808
+    digest: sha256:768ceb66eb0473d8e46fdd8bee5470fd20b85dc82bebc11f06638ae3c484bc63
