@@ -64,18 +64,21 @@ def test_prune_retries_after_transient_kubernetes_error():
 
 def test_gc_runs_without_new_successful_builds():
     controller = object.__new__(CodeGraphController)
+    controller.workspace_serve_ttl_seconds = 3600
     controller._submit_pending = lambda: 0
     controller._observe_active = lambda: 0
     controller.store = MagicMock()
     controller.publisher = MagicMock()
     controller.store.successful_generations.return_value = []
     controller.store.retired_serving_build_ids.return_value = ["old-id"]
+    controller.store.retired_workspace_serving_build_ids.return_value = []
     assert controller.drain_once() == 0
     controller.publisher.prune_build_ids.assert_called_once_with(["old-id"])
 
 
 def test_gc_runs_even_if_current_deployment_not_ready():
     controller = object.__new__(CodeGraphController)
+    controller.workspace_serve_ttl_seconds = 3600
     controller._submit_pending = lambda: 0
     controller._observe_active = lambda: 0
     controller.store = MagicMock()
@@ -84,6 +87,7 @@ def test_gc_runs_even_if_current_deployment_not_ready():
     controller.store.successful_generations.return_value = [build]
     controller.publisher.ensure.return_value = None
     controller.store.retired_serving_build_ids.return_value = ["retired-id"]
+    controller.store.retired_workspace_serving_build_ids.return_value = []
     assert controller.drain_once() == 0
     controller.store.activate_serving_alias.assert_not_called()
     controller.publisher.prune_build_ids.assert_called_once_with(["retired-id"])
