@@ -27,8 +27,8 @@
 
 ## 0. Status, Scope, and Authority
 
-**Status:** PROPOSAL  
-**Audience:** Memory Steward maintainers, RR maintainers, agent-runtime integrators  
+**Status:** PROPOSAL\
+**Audience:** Memory Steward maintainers, RR maintainers, agent-runtime integrators\
 **Change policy:** Working near-term implementation plan; unimplemented behavior MUST remain explicitly non-runtime until code, migrations, manifests, and affected documentation are updated.
 
 The current Memory Steward repository implementation is authoritative for existing runtime behavior.

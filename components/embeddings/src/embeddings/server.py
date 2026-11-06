@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastembed import TextEmbedding
 from pydantic import BaseModel
 
+
 class _SuppressSuccessfulProbeAccess(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         args = record.args

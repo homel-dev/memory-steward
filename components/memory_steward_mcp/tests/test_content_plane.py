@@ -173,6 +173,11 @@ def test_reference_ingestion_embeds_and_upserts_in_bounded_batches(monkeypatch) 
 
     monkeypatch.setattr(cp, "_embed", fake_embed)
     monkeypatch.setattr(cp, "_record_provenance", lambda *args: provenance.append(args))
+    monkeypatch.setattr(
+        cp,
+        "upsert_reference_document",
+        lambda **_kwargs: "document-id",
+    )
 
     stats = cp._ingest_reference_content(
         qdrant,
