@@ -430,10 +430,37 @@ def create_app(
     @app.get("/v1/codegraph/workspace-builds")
     def workspace_build_status(project_id: str, repository: str, snapshot_digest: str) -> dict[str, Any]:
         try:
-            return workspace_status(
+            status = workspace_status(
                 store, project_id=project_id, repository=repository,
                 snapshot_digest=snapshot_digest,
             )
+            if (
+                controller.publisher is None
+                or status.get("state") not in {"succeeded", "ready"}
+                or not status.get("build_id")
+            ):
+                return status
+
+            build = store.touch_workspace_generation_for_serving(str(status["build_id"]))
+            if build is None:
+                return status
+
+            endpoint = controller.publisher.ensure(build, create_alias=False)
+            if endpoint is None:
+                return {
+                    **status,
+                    "state": "succeeded",
+                    "ready": False,
+                    "worker_endpoint": None,
+                }
+
+            store.mark_workspace_served(build["build_id"], endpoint)
+            return {
+                **status,
+                "state": "ready",
+                "ready": True,
+                "worker_endpoint": endpoint,
+            }
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

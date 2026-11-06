@@ -273,6 +273,33 @@ class CodeGraphBuildStore:
             )
             return cur.fetchone() is not None
 
+    def touch_workspace_generation_for_serving(self, build_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE codegraph_builds
+                   SET updated_at = now()
+                   WHERE id = %s::uuid
+                     AND source_kind = 'RRWorkspace'
+                     AND state = 'succeeded'
+                     AND generation_bucket IS NOT NULL
+                     AND generation_key IS NOT NULL
+                     AND result IS NOT NULL
+                   RETURNING id::text, generation_bucket, generation_key,
+                             result, source_name, source_kind""",
+                (build_id,),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "build_id": str(row[0]),
+            "generation_bucket": row[1],
+            "generation_key": row[2],
+            "result": row[3],
+            "repository": row[4],
+            "source_kind": row[5],
+        }
+
     def activate_serving_alias(self, build: dict[str, Any], endpoint: str) -> bool:
         """Record the READY generation only if it remains the newest Flux event."""
         with self._connect() as conn, conn.cursor() as cur:
