@@ -347,6 +347,7 @@ class CodeGraphBuildStore:
                  AND old.source_kind = live.source_kind
                  AND old.source_name = live.source_name
                 WHERE old.state = 'succeeded'
+                  AND old.source_kind <> 'RRWorkspace'
                   AND (old.received_at, old.id) < (live.received_at, live.id)
                   AND a.updated_at < now() - (%s * interval '1 second')
                   AND NOT EXISTS (
