@@ -366,7 +366,7 @@ class CodeGraphBuildStore:
     def retired_workspace_serving_build_ids(
         self, *, ttl_seconds: int = 3600
     ) -> list[str]:
-        """Select idle workspace serving generations without active readers."""
+        """Select superseded idle workspace serving generations without active readers."""
         if ttl_seconds < 0:
             raise ValueError("ttl_seconds must be non-negative")
         with self._connect() as conn, conn.cursor() as cur:
@@ -377,6 +377,19 @@ class CodeGraphBuildStore:
                   AND build.state = 'succeeded'
                   AND build.worker_endpoint IS NOT NULL
                   AND build.updated_at < now() - (%s * interval '1 second')
+                  AND EXISTS (
+                    SELECT 1
+                    FROM codegraph_builds newer
+                    WHERE newer.source_namespace = build.source_namespace
+                      AND newer.source_kind = build.source_kind
+                      AND newer.source_name = build.source_name
+                      AND newer.state = 'succeeded'
+                      AND newer.generation_bucket IS NOT NULL
+                      AND newer.generation_key IS NOT NULL
+                      AND newer.result IS NOT NULL
+                      AND (newer.received_at, newer.id) >
+                          (build.received_at, build.id)
+                  )
                   AND NOT EXISTS (
                     SELECT 1
                     FROM capability_sessions session
