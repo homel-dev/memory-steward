@@ -79,6 +79,7 @@ class CodeGraphController:
         idle_poll_seconds: float = 5.0,
         codegraph_version: str = "0.20.1",
         index_profile: str = "graph-only",
+        workspace_serve_ttl_seconds: int = 3600,
         minio_client: Any | None = None,
         publisher: CodeGraphPublisher | None = None,
     ):
@@ -91,6 +92,7 @@ class CodeGraphController:
         self.idle_poll_seconds = idle_poll_seconds
         self.codegraph_version = codegraph_version
         self.index_profile = index_profile
+        self.workspace_serve_ttl_seconds = workspace_serve_ttl_seconds
         self._minio = minio_client
         self.publisher = publisher
 
@@ -360,7 +362,9 @@ class CodeGraphController:
             self._recover_superseded_sources()
         handled = self._submit_pending() + self._observe_active()
         if self.publisher is not None:
-            for build in self.store.successful_generations():
+            for build in self.store.successful_generations(
+                workspace_serve_ttl_seconds=self.workspace_serve_ttl_seconds
+            ):
                 try:
                     workspace = build["source_kind"] == "RRWorkspace"
                     endpoint = self.publisher.ensure(build, create_alias=not workspace)
@@ -378,6 +382,15 @@ class CodeGraphController:
                     self.publisher.prune_build_ids(retired)
             except Exception:
                 log.exception("failed to retire superseded CodeGraph serving generations")
+            try:
+                retired_workspace = self.store.retired_workspace_serving_build_ids(
+                    ttl_seconds=self.workspace_serve_ttl_seconds
+                )
+                if retired_workspace:
+                    self.publisher.prune_build_ids(retired_workspace)
+                    self.store.clear_workspace_serving_endpoints(retired_workspace)
+            except Exception:
+                log.exception("failed to retire idle workspace CodeGraph serving generations")
         return handled
 
     def run_forever(self) -> None:
@@ -487,6 +500,9 @@ def main() -> None:
         idle_poll_seconds=float(os.environ.get("CODEGRAPH_CONTROLLER_POLL_SECONDS", "5")),
         codegraph_version=os.environ.get("CODEGRAPH_VERSION", "0.20.1"),
         index_profile=os.environ.get("CODEGRAPH_INDEX_PROFILE", "graph-only"),
+        workspace_serve_ttl_seconds=int(
+            os.environ.get("CODEGRAPH_WORKSPACE_SERVE_TTL_SECONDS", "3600")
+        ),
         publisher=CodeGraphPublisher(namespace=namespace, image=os.environ["CODEGRAPH_WORKER_IMAGE"]),
     )
     log.info("codegraph_event=controller_start namespace=%s workflow_template=%s", namespace, controller.argo.workflow_template)

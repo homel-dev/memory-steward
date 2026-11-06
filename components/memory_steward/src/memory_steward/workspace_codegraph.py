@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+from dataclasses import replace
 from typing import Any
 
 from kubernetes import client, config, watch
@@ -116,6 +117,11 @@ class WorkspaceEventWatcher:
             record = parse_workspace_snapshot(
                 event.message, self.namespace, self.source_bucket
             )
+            created_at = getattr(
+                getattr(event, "metadata", None), "creation_timestamp", None
+            )
+            if created_at is not None:
+                record = replace(record, observed_at=created_at)
             result = self.store.record_event(record)
             log.info(
                 "codegraph_event=workspace_%s build_id=%s project=%s source=%s digest=%s",

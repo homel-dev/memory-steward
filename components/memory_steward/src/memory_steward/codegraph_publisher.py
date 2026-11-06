@@ -39,6 +39,8 @@ class CodeGraphPublisher:
 
     def ensure(self, build: Any, *, create_alias: bool = True) -> str | None:
         name = service_name(build["build_id"])
+        if hasattr(self, "_pruned"):
+            self._pruned.discard(build["build_id"])
         if not build["generation_bucket"] or not build["generation_key"]:
             raise RuntimeError(f"CodeGraph build {build['build_id']} has no generation")
         result = build["result"]
@@ -101,6 +103,15 @@ class CodeGraphPublisher:
         )
         if serving_container is None:
             raise RuntimeError(f"CodeGraph Deployment {name} has no serve container")
+        if (deployed.spec.replicas or 0) != 1:
+            self.apps.patch_namespaced_deployment(
+                name, self.namespace, {"spec": {"replicas": 1}}
+            )
+            log.info(
+                "codegraph_event=serving_reactivated build_id=%s",
+                build["build_id"],
+            )
+            return None
         if serving_container.image != self.image:
             # A create-only reconcile leaves existing serving Pods on old images.
             # Update the Pod template; Kubernetes rolls the Deployment safely.

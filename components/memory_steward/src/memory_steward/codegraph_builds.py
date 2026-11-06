@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -33,6 +34,7 @@ class FluxArtifactEvent:
     artifact_revision: str
     artifact_digest: str
     payload: dict[str, Any]
+    observed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -164,28 +166,52 @@ class CodeGraphBuildStore:
                 cur.execute("SELECT pg_notify(%s, %s)", (self.notify_channel, build_id))
                 return RecordResult(build_id=build_id, inserted=True)
 
-            cur.execute(
-                """
-                SELECT id::text
-                FROM codegraph_builds
-                WHERE source_namespace = %s
-                  AND source_kind = %s
-                  AND source_name = %s
-                  AND artifact_digest = %s
-                """,
-                (
-                    event.source_namespace,
-                    event.source_kind,
-                    event.source_name,
-                    event.artifact_digest,
-                ),
-            )
+            if event.source_kind == "RRWorkspace" and event.observed_at is not None:
+                cur.execute(
+                    """
+                    UPDATE codegraph_builds
+                    SET updated_at = GREATEST(updated_at, %s)
+                    WHERE source_namespace = %s
+                      AND source_kind = %s
+                      AND source_name = %s
+                      AND artifact_digest = %s
+                    RETURNING id::text
+                    """,
+                    (
+                        event.observed_at,
+                        event.source_namespace,
+                        event.source_kind,
+                        event.source_name,
+                        event.artifact_digest,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id::text
+                    FROM codegraph_builds
+                    WHERE source_namespace = %s
+                      AND source_kind = %s
+                      AND source_name = %s
+                      AND artifact_digest = %s
+                    """,
+                    (
+                        event.source_namespace,
+                        event.source_kind,
+                        event.source_name,
+                        event.artifact_digest,
+                    ),
+                )
             existing = cur.fetchone()
             if existing is None:
                 raise RuntimeError("CodeGraph build row disappeared after conflict")
             return RecordResult(build_id=str(existing[0]), inserted=False)
 
-    def successful_generations(self) -> list[dict[str, Any]]:
+    def successful_generations(
+        self, *, workspace_serve_ttl_seconds: int = 3600
+    ) -> list[dict[str, Any]]:
+        if workspace_serve_ttl_seconds < 0:
+            raise ValueError("workspace_serve_ttl_seconds must be non-negative")
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute("""
                 SELECT b.id::text, b.generation_bucket, b.generation_key,
@@ -195,19 +221,40 @@ class CodeGraphBuildStore:
                   AND b.generation_bucket IS NOT NULL
                   AND b.generation_key IS NOT NULL
                   AND b.result IS NOT NULL
-                  AND (b.source_kind = 'RRWorkspace' OR NOT EXISTS (
-                    SELECT 1 FROM codegraph_builds newer
-                    WHERE newer.source_namespace = b.source_namespace
-                      AND newer.source_kind = b.source_kind
-                      AND newer.source_name = b.source_name
-                      AND newer.state = 'succeeded'
-                      AND newer.generation_bucket IS NOT NULL
-                      AND newer.generation_key IS NOT NULL
-                      AND newer.result IS NOT NULL
-                      AND (newer.received_at, newer.id) > (b.received_at, b.id)
-                  ))
+                  AND (
+                    (
+                      b.source_kind = 'RRWorkspace'
+                      AND (
+                        b.updated_at >= now() - (%s * interval '1 second')
+                        OR EXISTS (
+                          SELECT 1
+                          FROM capability_sessions session
+                          JOIN codegraph_registry registry
+                            ON registry.id = session.codegraph_registry_id
+                          WHERE session.status = 'active'
+                            AND session.expires_at > now()
+                            AND registry.worker_id =
+                                'cg-serve-' || replace(b.id::text, '-', '')
+                        )
+                      )
+                    )
+                    OR (
+                      b.source_kind <> 'RRWorkspace'
+                      AND NOT EXISTS (
+                        SELECT 1 FROM codegraph_builds newer
+                        WHERE newer.source_namespace = b.source_namespace
+                          AND newer.source_kind = b.source_kind
+                          AND newer.source_name = b.source_name
+                          AND newer.state = 'succeeded'
+                          AND newer.generation_bucket IS NOT NULL
+                          AND newer.generation_key IS NOT NULL
+                          AND newer.result IS NOT NULL
+                          AND (newer.received_at, newer.id) > (b.received_at, b.id)
+                      )
+                    )
+                  )
                 ORDER BY b.source_namespace, b.source_name
-            """)
+            """, (workspace_serve_ttl_seconds,))
             return [
                 {"build_id": str(row[0]), "generation_bucket": row[1],
                  "generation_key": row[2], "result": row[3],
@@ -218,11 +265,12 @@ class CodeGraphBuildStore:
     def mark_workspace_served(self, build_id: str, endpoint: str) -> bool:
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                """UPDATE codegraph_builds SET worker_endpoint = %s, updated_at = now()
+                """UPDATE codegraph_builds SET worker_endpoint = %s
                    WHERE id = %s::uuid AND source_kind = 'RRWorkspace'
                      AND state = 'succeeded' AND generation_key IS NOT NULL
+                     AND worker_endpoint IS DISTINCT FROM %s
                    RETURNING id""",
-                (endpoint, build_id),
+                (endpoint, build_id, endpoint),
             )
             return cur.fetchone() is not None
 
@@ -288,6 +336,47 @@ class CodeGraphBuildStore:
                 ORDER BY old.source_namespace, old.source_name, old.received_at
             """, (grace_seconds,))
             return [str(row[0]) for row in cur.fetchall()]
+
+    def retired_workspace_serving_build_ids(
+        self, *, ttl_seconds: int = 3600
+    ) -> list[str]:
+        """Select idle workspace serving generations without active readers."""
+        if ttl_seconds < 0:
+            raise ValueError("ttl_seconds must be non-negative")
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute("""
+                SELECT build.id::text
+                FROM codegraph_builds build
+                WHERE build.source_kind = 'RRWorkspace'
+                  AND build.state = 'succeeded'
+                  AND build.worker_endpoint IS NOT NULL
+                  AND build.updated_at < now() - (%s * interval '1 second')
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM capability_sessions session
+                    JOIN codegraph_registry registry
+                      ON registry.id = session.codegraph_registry_id
+                    WHERE session.status = 'active'
+                      AND session.expires_at > now()
+                      AND registry.worker_id =
+                          'cg-serve-' || replace(build.id::text, '-', '')
+                  )
+                ORDER BY build.updated_at, build.id
+            """, (ttl_seconds,))
+            return [str(row[0]) for row in cur.fetchall()]
+
+    def clear_workspace_serving_endpoints(self, build_ids: list[str]) -> int:
+        if not build_ids:
+            return 0
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE codegraph_builds
+                   SET worker_endpoint = NULL
+                   WHERE source_kind = 'RRWorkspace'
+                     AND id::text = ANY(%s::text[])""",
+                (build_ids,),
+            )
+            return cur.rowcount
 
     def latest_superseded_sources(self) -> list[FluxArtifactEvent]:
         """Find sources whose last recorded artifact was superseded with no successor."""
