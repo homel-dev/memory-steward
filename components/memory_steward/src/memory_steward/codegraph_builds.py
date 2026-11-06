@@ -166,11 +166,11 @@ class CodeGraphBuildStore:
                 cur.execute("SELECT pg_notify(%s, %s)", (self.notify_channel, build_id))
                 return RecordResult(build_id=build_id, inserted=True)
 
-            if event.source_kind == "RRWorkspace" and event.observed_at is not None:
+            if event.source_kind == "RRWorkspace":
                 cur.execute(
                     """
                     UPDATE codegraph_builds
-                    SET updated_at = GREATEST(updated_at, %s)
+                    SET updated_at = now()
                     WHERE source_namespace = %s
                       AND source_kind = %s
                       AND source_name = %s
@@ -178,7 +178,6 @@ class CodeGraphBuildStore:
                     RETURNING id::text
                     """,
                     (
-                        event.observed_at,
                         event.source_namespace,
                         event.source_kind,
                         event.source_name,
