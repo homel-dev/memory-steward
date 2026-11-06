@@ -117,11 +117,19 @@ class WorkspaceEventWatcher:
             record = parse_workspace_snapshot(
                 event.message, self.namespace, self.source_bucket
             )
-            created_at = getattr(
-                getattr(event, "metadata", None), "creation_timestamp", None
+            series = getattr(event, "series", None)
+            observed_at = (
+                getattr(series, "last_observed_time", None)
+                or getattr(event, "last_timestamp", None)
+                or getattr(event, "event_time", None)
+                or getattr(
+                    getattr(event, "metadata", None),
+                    "creation_timestamp",
+                    None,
+                )
             )
-            if created_at is not None:
-                record = replace(record, observed_at=created_at)
+            if observed_at is not None:
+                record = replace(record, observed_at=observed_at)
             result = self.store.record_event(record)
             log.info(
                 "codegraph_event=workspace_%s build_id=%s project=%s source=%s digest=%s",
