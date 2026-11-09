@@ -22,14 +22,14 @@ resources:
 
 images:
   - name: ghcr.io/homel-dev/memory-steward/embeddings
-    digest: sha256:324ec3606f8f9ac781e3e6ec5ac0c1f987489d323aa12835e82be2988089f4f8
+    digest: sha256:2bcce9904bdb2b052ecce7d6c6d348be4a1e11139089be67095780dc8380c934
   - name: ghcr.io/homel-dev/memory-steward/memory-router
-    digest: sha256:fbfa376a441138ccf556b89334de63a817b0c4a988986c5a085e0ee9f51e8c23
+    digest: sha256:5aeff590be69aec810772a7d931a78ab4a536e5e0f20582ac014f1611e966116
   - name: ghcr.io/homel-dev/memory-steward/memory-steward
-    digest: sha256:7ff03cfed68601d235a40299f610bd07e96dd39e7e6ef6dd3cad29976236227e
+    digest: sha256:dc069b959112076be06f7e74c069d649e04f49cde0b3aafb6e88efd906f5af91
   - name: ghcr.io/homel-dev/memory-steward/memory-steward-mcp
-    digest: sha256:d9e471a1f33f3df33dc4d6d04a5f374d469370e991dd80522c97c7c489eb9f4c
+    digest: sha256:a511c58992e51beb2bfe3f98e7197b10613abadbaf11493e3932034e117a10ee
   - name: ghcr.io/homel-dev/memory-steward/memory-steward-list
-    digest: sha256:d40907eef7280f4a3688d798cba2e824bcc25f938ebbf415c56709923f2156cd
+    digest: sha256:1fc1b4304fb194d4287544ca51b4cf2d35ab89225e4235cc5e48d931ae957081
   - name: ghcr.io/homel-dev/memory-steward/tooling
-    digest: sha256:814ae4ded385ff4700dce831e69f2434109963455324db31d2f79d0930819808
+    digest: sha256:b1c967e7d7658d470510a4e22c65f2ef89129d8fae5b785b0c27f34530788632

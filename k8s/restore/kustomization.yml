@@ -4,4 +4,4 @@ resources:
   - restore-job.yaml
 images:
   - name: ghcr.io/homel-dev/memory-steward/tooling
-    digest: sha256:814ae4ded385ff4700dce831e69f2434109963455324db31d2f79d0930819808
+    digest: sha256:b1c967e7d7658d470510a4e22c65f2ef89129d8fae5b785b0c27f34530788632
