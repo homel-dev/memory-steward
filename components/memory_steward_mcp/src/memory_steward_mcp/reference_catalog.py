@@ -373,7 +373,7 @@ def run_reference_preflight(
             "product": document["product"],
             "version": document["version"],
         }
-        for document, _vector in ranked[selected_count:]
+        for document, _vector in ranked[selected_count : selected_count * 3]
     ]
     return {
         "schemaVersion": "rr-reference-preflight-result.v1",
